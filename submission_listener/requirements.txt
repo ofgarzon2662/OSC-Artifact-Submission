@@ -1,0 +1,4 @@
+pika==1.2.0
+requests==2.28.1
+jsonschema==4.17.3
+PyJWT==2.6.0 
