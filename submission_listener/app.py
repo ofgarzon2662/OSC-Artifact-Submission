@@ -8,6 +8,10 @@ import time
 import http.server
 import threading
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -16,14 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
+# Environment variables - Updated to match API Gateway expectations
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE = os.getenv('RABBITMQ_QUEUE', 'artifact.submitted.queue')
-API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:8080/api/artifacts')
-API_KEY = os.getenv('API_KEY', 'submission-listener-default-key')
+API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://api-gateway:3000/api/artifacts')
+API_KEY = os.getenv('API_KEY', 'a_random_key')
 SERVICE_ROLE = os.getenv('SERVICE_ROLE', 'submitter_listener')
 
 # Load schema for validation
@@ -35,7 +39,7 @@ def update_artifact_status(artifact_id, submission_data):
     Send a PATCH request to the API Gateway to update an artifact's status.
     Uses API Key authentication with role-based access control.
     """
-    url = f"{API_GATEWAY_URL}/{artifact_id}/status"
+    url = f"{API_GATEWAY_URL}/{artifact_id}"
     
     # Prepare data for PATCH request based on the artifact.submitted message
     patch_data = {

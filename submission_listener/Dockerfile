@@ -11,7 +11,8 @@ RUN mkdir -p /app/schema
 # Copy the schema file
 COPY ../contracts/artifact.submitted.v1.schema.json /app/schema/
 
-# Copy application code
+# Copy application code and environment file
 COPY app.py .
+COPY .env .
 
 CMD ["python", "app.py"] 
