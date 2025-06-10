@@ -10,8 +10,9 @@ import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file (only if running locally)
+if os.path.exists('.env'):
+    load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -20,26 +21,58 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables - Updated to match API Gateway expectations
-RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+# Detect environment
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
+IS_DOCKER = os.path.exists('/.dockerenv') or ENVIRONMENT == 'docker'
+
+# Environment variables with secure defaults
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localhost')
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE = os.getenv('RABBITMQ_QUEUE', 'artifact.submitted.queue')
-API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://api-gateway:3000/api/artifacts')
-API_KEY = os.getenv('API_KEY', 'a_random_key')
+
+# API Gateway URL with environment-aware defaults
+if IS_DOCKER:
+    API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://osc-api-gateway:3000/api/v1/artifacts')
+else:
+    API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
+
+# IMPORTANT: Never hardcode real API keys in source code
+API_KEY = os.getenv('API_KEY')
 SERVICE_ROLE = os.getenv('SERVICE_ROLE', 'submitter_listener')
 
-# Load schema for validation
-with open('/app/schema/artifact.submitted.v1.schema.json', 'r') as f:
-    artifact_submitted_schema = json.load(f)
+# Log environment info
+logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
+logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+logger.info(f"API Gateway: {API_GATEWAY_URL}")
+
+def load_schema():
+    """Load the JSON schema from the appropriate path based on environment"""
+    if IS_DOCKER:
+        # Docker path
+        schema_path = '/app/schema/artifact.submitted.v1.schema.json'
+    else:
+        # Local development path
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schema_path = os.path.join(current_dir, 'contracts', 'artifact.submitted.v1.schema.json')
+    
+    if not os.path.exists(schema_path):
+        raise FileNotFoundError(f"Schema file not found at: {schema_path}")
+    
+    logger.info(f"Loading schema from: {schema_path}")
+    with open(schema_path, 'r') as f:
+        return json.load(f)
+
+# Load the schema
+artifact_submitted_schema = load_schema()
 
 def update_artifact_status(artifact_id, submission_data):
     """
     Send a PATCH request to the API Gateway to update an artifact's status.
     Uses API Key authentication with role-based access control.
     """
-    url = f"{API_GATEWAY_URL}/{artifact_id}"
+    url = f"{API_GATEWAY_URL}/{artifact_id}/status"
     
     # Prepare data for PATCH request based on the artifact.submitted message
     patch_data = {
@@ -47,7 +80,7 @@ def update_artifact_status(artifact_id, submission_data):
         'submittedAt': submission_data['submittedAt']
     }
     
-    # Include blockchainTxId if present (should be there if submissionState is SUBMITTED)
+    # Include blockchainTxId if present (should be there if submissionState is SUCCESS)
     if 'blockchainTxId' in submission_data:
         patch_data['blockchainTxId'] = submission_data['blockchainTxId']
     
@@ -115,9 +148,9 @@ def callback(ch, method, properties, body):
             logger.info(f"Successfully processed message for artifact {artifact_id}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            # Negative acknowledge and requeue for retry (with exponential backoff)
-            logger.warning(f"Failed to process message for artifact {artifact_id}, requeuing")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # Don't requeue - just reject the message
+            logger.error(f"Failed to process message for artifact {artifact_id}, rejecting (not requeuing)")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in message: {str(e)}")
@@ -127,11 +160,10 @@ def callback(ch, method, properties, body):
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except Exception as e:
         logger.error(f"Unexpected error processing message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 def start_rabbitmq_consumer():
     """Connect to RabbitMQ and start consuming messages."""
-    # Retry connection if RabbitMQ is not immediately available
     connection = None
     retry_count = 0
     max_retries = 30  # 2.5 minutes of retries
@@ -194,8 +226,13 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
             health_data = {
                 "status": "healthy",
                 "service": "submission-listener",
+                "environment": "Docker" if IS_DOCKER else "Local",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "rabbitmq_queue": RABBITMQ_QUEUE,
+                "rabbitmq": {
+                    "host": RABBITMQ_HOST,
+                    "port": RABBITMQ_PORT,
+                    "queue": RABBITMQ_QUEUE
+                },
                 "api_gateway_url": API_GATEWAY_URL
             }
             self.wfile.write(json.dumps(health_data).encode())

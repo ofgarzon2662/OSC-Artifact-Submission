@@ -16,7 +16,7 @@
       },
       "submissionState": {
         "type": "string",
-        "enum": ["SUBMITTED", "FAILED"]
+        "enum": ["PENDING", "FAILED", "SUCCESS"]
       },
       "blockchainTxId": {
         "type": "string",
@@ -37,7 +37,7 @@
       }
     },
     "if": {
-      "properties": { "submissionState": { "const": "SUBMITTED" } }
+      "properties": { "submissionState": { "const": "SUCCESS" } }
     },
     "then": {
       "required": ["blockchainTxId"]

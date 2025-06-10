@@ -1,2 +1,8 @@
 submission_listener/.env
 .env
+submission_listener/venv
+submission_listener/.coverage
+submission_listener/.python-version
+submission_listener/htmlcov
+submission_listener/.pytest_cache
+submission_listener/__pycache__
