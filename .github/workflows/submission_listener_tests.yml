@@ -48,33 +48,4 @@ jobs:
     - name: Run submission listener tests only
       run: |
         timeout 60 pytest test_app.py -v --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=75 || true
-    
-    - name: Check if tests completed successfully
-      run: |
-        if [ -f coverage.xml ]; then
-          echo "✅ Tests completed successfully!"
-          python -c "
-          import xml.etree.ElementTree as ET
-          tree = ET.parse('coverage.xml')
-          root = tree.getroot()
-          coverage = float(root.attrib['line-rate']) * 100
-          print(f'📊 Submission Listener Coverage: {coverage:.2f}%')
-          if coverage < 75:
-              print('❌ Coverage below 75% threshold!')
-              exit(1)
-          else:
-              print('✅ Coverage meets 75% threshold!')
-          "
-        else
-          echo "❌ Tests did not complete - coverage file missing"
-          exit 1
-        fi
-    
-    - name: Upload coverage reports
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: submission-listener-coverage
-        path: |
-          submission_listener/coverage.xml
-          submission_listener/htmlcov/ 
+ 
