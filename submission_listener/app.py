@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 # Environment variables - Updated to match API Gateway expectations
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
-RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
-RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
+RABBITMQ_USER = os.getenv('RABBITMQ_USER')
+RABBITMQ_PASS = os.getenv('RABBITMQ_PASS')
 RABBITMQ_QUEUE = os.getenv('RABBITMQ_QUEUE', 'artifact.submitted.queue')
 API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://api-gateway:3000/api/artifacts')
 API_KEY = os.getenv('API_KEY', 'a_random_key')
@@ -101,7 +101,7 @@ def callback(ch, method, properties, body):
         # Validate message against schema
         if not validate_message(message):
             logger.error("Message validation failed, rejecting message")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue validation errors
             return
         
         # Extract artifact ID and update status
@@ -115,19 +115,19 @@ def callback(ch, method, properties, body):
             logger.info(f"Successfully processed message for artifact {artifact_id}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            # Negative acknowledge and requeue for retry (with exponential backoff)
-            logger.warning(f"Failed to process message for artifact {artifact_id}, requeuing")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # Don't requeue - just reject the message
+            logger.error(f"Failed to process message for artifact {artifact_id}, rejecting (not requeuing)")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue bad JSON
     except KeyError as e:
         logger.error(f"Missing required field in message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue bad structure
     except Exception as e:
         logger.error(f"Unexpected error processing message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue unexpected errors
 
 def start_rabbitmq_consumer():
     """Connect to RabbitMQ and start consuming messages."""
