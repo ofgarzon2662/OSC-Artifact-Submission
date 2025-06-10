@@ -1,0 +1,79 @@
+name: Submission Listener Tests
+
+on:
+  push:
+    paths:
+      - 'submission_listener/**'
+      - '.github/workflows/submission_listener_tests.yml'
+  pull_request:
+    paths:
+      - 'submission_listener/**'
+      - '.github/workflows/submission_listener_tests.yml'
+
+jobs:
+  test-submission-listener:
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: submission_listener
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('submission_listener/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create contracts directory and schema file
+      run: |
+        mkdir -p contracts
+        echo '{"$schema":"http://json-schema.org/draft-07/schema#","title":"artifact.submitted.v1","type":"object","additionalProperties":false,"required":["artifactId","submissionState","submittedAt","version"],"properties":{"artifactId":{"type":"string","format":"uuid"},"submissionState":{"enum":["PENDING","FAILED","SUCCESS"],"type":"string"},"submittedAt":{"type":"string","format":"date-time"},"blockchainTxId":{"type":"string"},"peerId":{"type":"string"},"version":{"enum":["v1"],"type":"string"}}}' > contracts/artifact.submitted.v1.schema.json
+    
+    - name: Run submission listener tests only
+      run: |
+        pytest test_app.py -v --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=75
+    
+    - name: Display coverage summary
+      run: |
+        python -c "
+        import xml.etree.ElementTree as ET
+        import os
+        if os.path.exists('coverage.xml'):
+            tree = ET.parse('coverage.xml')
+            root = tree.getroot()
+            coverage = float(root.attrib['line-rate']) * 100
+            print(f'📊 Submission Listener Coverage: {coverage:.2f}%')
+            if coverage < 75:
+                print('❌ Coverage below 75% threshold!')
+                exit(1)
+            else:
+                print('✅ Coverage meets 75% threshold!')
+        else:
+            print('❌ Coverage file not found!')
+            exit(1)
+        "
+    
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: submission-listener-coverage
+        path: |
+          submission_listener/coverage.xml
+          submission_listener/htmlcov/ 
