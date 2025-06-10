@@ -494,52 +494,55 @@ class TestHealthServer:
         assert hasattr(app, 'start_health_server')
     
     @patch('app.http.server.HTTPServer')
-    @patch('app.threading.Thread')
-    def test_start_health_server_components(self, mock_thread, mock_http_server):
-        """Test health server components without actually starting threads"""
+    def test_start_health_server_components(self, mock_http_server):
+        """Test health server creates HTTPServer correctly"""
         from app import start_health_server
         
-        # Mock server instance  
+        # Mock server instance
         server_mock = Mock()
         mock_http_server.return_value = server_mock
         
-        # Mock thread but don't let it actually start
-        thread_mock = Mock()
-        mock_thread.return_value = thread_mock
+        # Mock serve_forever to prevent blocking
+        server_mock.serve_forever.side_effect = KeyboardInterrupt()
         
-        # Call the function
-        start_health_server()
+        try:
+            start_health_server()
+        except KeyboardInterrupt:
+            pass  # Expected behavior
         
-        # Verify components were set up correctly
+        # Verify server was created with correct parameters
         mock_http_server.assert_called_once()
-        mock_thread.assert_called_once()
+        call_args = mock_http_server.call_args[0]
+        assert call_args[0] == ('0.0.0.0', 8000)  # Address and port
         
-        # Verify thread was configured as daemon
-        call_kwargs = mock_thread.call_args[1]
-        assert call_kwargs.get('daemon') == True
+        # Verify serve_forever was called
+        server_mock.serve_forever.assert_called_once()
 
 class TestAdditionalCoverage:
     """Additional tests to increase coverage"""
     
+    @responses.activate
+    @patch('app.API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
     def test_update_artifact_status_missing_peer_id(self, valid_message):
         """Test update without peerId"""
         message_without_peer = valid_message.copy()
         del message_without_peer["peerId"]
+        artifact_id = message_without_peer["artifactId"]
         
-        with responses.RequestsMock() as rsps:
-            rsps.add(
-                responses.PATCH,
-                f"{API_GATEWAY_URL}/{valid_message['artifactId']}/status",
-                json={"status": "updated"},
-                status=200
-            )
-            
-            result = update_artifact_status(valid_message["artifactId"], message_without_peer)
-            assert result == True
-            
-            # Verify peerId is not in request body
-            request_body = json.loads(rsps.calls[0].request.body)
-            assert "peerId" not in request_body
+        # Mock the API response
+        responses.add(
+            responses.PATCH,
+            f"http://localhost:3000/api/v1/artifacts/{artifact_id}/status",
+            json={"status": "updated"},
+            status=200
+        )
+        
+        result = update_artifact_status(artifact_id, message_without_peer)
+        assert result == True
+        
+        # Verify peerId is not in request body
+        request_body = json.loads(responses.calls[0].request.body)
+        assert "peerId" not in request_body
     
     @patch('app.logger')
     def test_logging_calls(self, mock_logger):
@@ -591,19 +594,23 @@ class TestAdditionalCoverage:
             )
     
     @responses.activate
-    def test_pending_submission_flow(self):
+    @patch('app.API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
+    def test_pending_submission_flow(self, valid_message):
         """Test complete flow with PENDING submission state"""
-        pending_message = {
-            "artifactId": "test-pending-artifact",
-            "submissionState": "PENDING",
-            "submittedAt": "2023-12-07T15:30:00.000Z",
-            "version": "v1"
-        }
+        pending_message = valid_message.copy()
+        pending_message["submissionState"] = "PENDING"
+        # Remove blockchainTxId and peerId for PENDING state
+        if "blockchainTxId" in pending_message:
+            del pending_message["blockchainTxId"]
+        if "peerId" in pending_message:
+            del pending_message["peerId"]
+        
+        artifact_id = pending_message["artifactId"]
         
         # Mock successful API response
         responses.add(
             responses.PATCH,
-            f"{API_GATEWAY_URL}/test-pending-artifact/status",
+            f"http://localhost:3000/api/v1/artifacts/{artifact_id}/status",
             json={"status": "updated"},
             status=200
         )
