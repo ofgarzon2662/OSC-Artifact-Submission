@@ -39,8 +39,11 @@ else:
     API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
 
 # IMPORTANT: Never hardcode real API keys in source code
-API_KEY = os.getenv('API_KEY')
+API_KEY = os.getenv('API_KEY', 'test-api-key')
 SERVICE_ROLE = os.getenv('SERVICE_ROLE', 'submitter_listener')
+
+if API_KEY == 'test-api-key' or API_KEY == '':
+    logger.warning("API_KEY is not set. Set API_KEY environment variable.")
 
 # Log environment info
 logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")

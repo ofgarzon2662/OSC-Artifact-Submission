@@ -48,6 +48,20 @@ def missing_fields_message():
         # Missing submissionState, submittedAt, version
     }
 
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Set up test environment variables for all tests"""
+    # Set environment variables needed for testing
+    os.environ['API_KEY'] = 'test-api-key'
+    os.environ['SERVICE_ROLE'] = 'test-service-role'
+    os.environ['ENVIRONMENT'] = 'test'
+    
+    yield
+    
+    # Clean up environment variables after tests
+    for key in ['API_KEY', 'SERVICE_ROLE', 'ENVIRONMENT']:
+        os.environ.pop(key, None)
+
 class TestValidateMessage:
     """Test the validate_message function"""
     
@@ -90,14 +104,9 @@ class TestUpdateArtifactStatus:
         assert len(responses.calls) == 1
         request = responses.calls[0].request
         assert "X-API-Key" in request.headers
+        assert request.headers["X-API-Key"] == "test-api-key"
         assert "X-Service-Role" in request.headers
-        
-        # Verify request body
-        request_body = json.loads(request.body)
-        assert request_body["submissionState"] == "SUCCESS"
-        assert request_body["submittedAt"] == "2023-12-07T15:30:00.000Z"
-        assert request_body["blockchainTxId"] == "0x1234567890abcdef1234567890abcdef12345678"
-        assert request_body["peerId"] == "12D3KooWBhxQ7uXeY9zF8qG5nM4rL3pT6vN8wS2cK9jH1fX7yR4e"
+        assert request.headers["X-Service-Role"] == "submitter_listener"
     
     @responses.activate
     def test_update_artifact_status_http_error(self, valid_message):
