@@ -30,7 +30,7 @@ RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localho
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
-RABBITMQ_QUEUE = os.getenv('RABBITMQ_QUEUE', 'artifact.submitted.queue')
+RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 
 # API Gateway URL with environment-aware defaults
 if IS_DOCKER:
@@ -39,16 +39,18 @@ else:
     API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
 
 # IMPORTANT: Never hardcode real API keys in source code
-API_KEY = os.getenv('API_KEY', 'test-api-key')
-SERVICE_ROLE = os.getenv('SERVICE_ROLE', 'submitter_listener')
+SUBMISSION_LISTENER_API_KEY = os.getenv('SUBMISSION_LISTENER_API_KEY', 'test-api-key')
+SUBMISSION_LISTENER_SERVICE_ROLE = os.getenv('SUBMISSION_LISTENER_SERVICE_ROLE', 'submitter_listener')
 
-if API_KEY == 'test-api-key' or API_KEY == '':
-    logger.warning("API_KEY is not set. Set API_KEY environment variable.")
+if SUBMISSION_LISTENER_API_KEY == 'test-api-key' or SUBMISSION_LISTENER_API_KEY == '':
+    logger.warning("SUBMISSION_LISTENER_API_KEY is not set. Set SUBMISSION_LISTENER_API_KEY environment variable.")
 
 # Log environment info
 logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
 logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
 logger.info(f"API Gateway: {API_GATEWAY_URL}")
+logger.info(f"SUBMISSION_LISTENER_API_KEY configured: {'***' if SUBMISSION_LISTENER_API_KEY and SUBMISSION_LISTENER_API_KEY != 'test-api-key' else 'NOT SET'}")
+logger.info(f"SUBMISSION_LISTENER_SERVICE_ROLE configured: {SUBMISSION_LISTENER_SERVICE_ROLE}")
 
 def load_schema():
     """Load the JSON schema from the appropriate path based on environment"""
@@ -75,7 +77,7 @@ def update_artifact_status(artifact_id, submission_data):
     Send a PATCH request to the API Gateway to update an artifact's status.
     Uses API Key authentication with role-based access control.
     """
-    url = f"{API_GATEWAY_URL}/{artifact_id}/status"
+    url = f"{API_GATEWAY_URL}/{artifact_id}"
     
     # Prepare data for PATCH request based on the artifact.submitted message
     patch_data = {
@@ -93,13 +95,14 @@ def update_artifact_status(artifact_id, submission_data):
     
     headers = {
         'Content-Type': 'application/json',
-        'X-API-Key': API_KEY,
-        'X-Service-Role': SERVICE_ROLE,
+        'X-API-Key': SUBMISSION_LISTENER_API_KEY,
+        'X-Service-Role': SUBMISSION_LISTENER_SERVICE_ROLE,
         'User-Agent': 'submission-listener/1.0'
     }
     
     try:
         logger.info(f"Sending PATCH request to {url} for artifact {artifact_id}")
+        logger.debug(f"Request payload: {json.dumps(patch_data, indent=2)}")
         response = requests.patch(url, json=patch_data, headers=headers, timeout=10)
         response.raise_for_status()
         
@@ -197,15 +200,15 @@ def start_rabbitmq_consumer():
     channel = connection.channel()
     
     # Ensure queue exists (in case it wasn't created by definitions.json)
-    channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue=RABBITMQ_QUEUE, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMITTED, on_message_callback=callback)
     
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE}")
+    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMITTED}")
     logger.info(f"Using API Gateway URL: {API_GATEWAY_URL}")
-    logger.info(f"Service role: {SERVICE_ROLE}")
+    logger.info(f"Service role: {SUBMISSION_LISTENER_SERVICE_ROLE}")
     
     try:
         channel.start_consuming()
@@ -234,7 +237,7 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
                 "rabbitmq": {
                     "host": RABBITMQ_HOST,
                     "port": RABBITMQ_PORT,
-                    "queue": RABBITMQ_QUEUE
+                    "queue": RABBITMQ_QUEUE_SUBMITTED
                 },
                 "api_gateway_url": API_GATEWAY_URL
             }
