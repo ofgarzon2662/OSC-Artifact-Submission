@@ -7,9 +7,11 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY rabbitmq.conf /etc/rabbitmq/rabbitmq.conf
 COPY definitions.json /etc/rabbitmq/definitions.json
 COPY init-definitions.sh /usr/local/bin/init-definitions.sh
+COPY monitor-messages.sh /usr/local/bin/monitor-messages.sh
 
-# Make the script executable
+# Make the scripts executable
 RUN chmod +x /usr/local/bin/init-definitions.sh
+RUN chmod +x /usr/local/bin/monitor-messages.sh
 
 # Create a custom entrypoint that starts RabbitMQ and then imports definitions
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

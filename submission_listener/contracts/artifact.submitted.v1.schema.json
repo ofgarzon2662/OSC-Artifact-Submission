@@ -23,6 +23,11 @@
         "minLength": 1,
         "maxLength": 128
       },
+      "error": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
       "submittedAt": {
         "type": "string",
         "format": "date-time"
@@ -36,11 +41,23 @@
         "const": "v1"
       }
     },
-    "if": {
-      "properties": { "submissionState": { "const": "SUCCESS" } }
-    },
-    "then": {
-      "required": ["blockchainTxId"]
-    }
-  }
+    "allOf": [
+      {
+        "if": {
+          "properties": { "submissionState": { "const": "SUCCESS" } }
+        },
+        "then": {
+          "required": ["blockchainTxId"]
+        }
+      },
+      {
+        "if": {
+          "properties": { "submissionState": { "const": "FAILED" } }
+        },
+        "then": {
+          "required": ["error"]
+        }
+      }
+    ]
+}
   

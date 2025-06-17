@@ -28,6 +28,63 @@ services:
       - osc-api-services-network
     restart: unless-stopped
 
+  # Mock Blockchain Peer
+  mock_peer:
+    build:
+      context: ./mock_peer
+      dockerfile: Dockerfile
+    container_name: osc-mock-peer
+    ports:
+      - "8080:8080"  # FastAPI server port
+    environment:
+      - ENVIRONMENT=docker
+    networks:
+      - osc-api-services-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Submission Worker
+  submission_worker:
+    build:
+      context: ./submission_worker
+      dockerfile: Dockerfile
+    container_name: osc-submission-worker
+    environment:
+      # RabbitMQ Configuration
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
+      RABBITMQ_QUEUE_CREATED: ${RABBITMQ_QUEUE_CREATED}
+      RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED}
+      
+      # Mock Peer Configuration
+      MOCK_PEER_URL: ${MOCK_PEER_URL:-http://mock_peer:8080}
+      
+      # Environment
+      ENVIRONMENT: docker
+    ports:
+      - "${SUBMISSION_WORKER_HEALTH_PORT:-8001}:8000"  # Health check port
+    networks:
+      - osc-api-services-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mock_peer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   # Submission Listener
   submission_listener:
     build:
