@@ -9,13 +9,13 @@ COPY definitions.json /etc/rabbitmq/definitions.json
 COPY init-definitions.sh /usr/local/bin/init-definitions.sh
 COPY monitor-messages.sh /usr/local/bin/monitor-messages.sh
 
-# Make the scripts executable
-RUN chmod +x /usr/local/bin/init-definitions.sh
-RUN chmod +x /usr/local/bin/monitor-messages.sh
+# Fix line endings and make the scripts executable
+RUN sed -i 's/\r$//' /usr/local/bin/init-definitions.sh && chmod +x /usr/local/bin/init-definitions.sh
+RUN sed -i 's/\r$//' /usr/local/bin/monitor-messages.sh && chmod +x /usr/local/bin/monitor-messages.sh
 
 # Create a custom entrypoint that starts RabbitMQ and then imports definitions
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["rabbitmq-server"] 
