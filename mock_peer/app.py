@@ -53,57 +53,23 @@ PEER_ID = "12D3KooWBhxQ7uXeY9zF8qG5nM4rL3pT6vN8wS2cK9jH1fX7yR4e"
 
 def determine_success_from_artifact(artifact_data: Dict[str, Any]) -> tuple[bool, str]:
     """
-    Determine submission success based on artifact data patterns.
+    Determine submission success based on artifact title patterns.
     This enables deterministic testing without container restarts.
-    
+
     Test Patterns:
-    - Title contains 'test_success', 'force_success' → Always SUCCESS
-    - Title contains 'test_gas' → Always FAIL with gas error
-    - Title contains 'test_network' → Always FAIL with network error
-    - Keywords contain 'test-success' → Always SUCCESS
-    - Keywords contain 'test-fail' → Always FAIL
-    - No patterns → Random (95% success rate)
-    
-    Args:
-        artifact_data: The artifact data from the submission request
-        
-    Returns:
-        tuple: (success: bool, error_message: str or None)
+    - Title contains a failure pattern (e.g., 'test_gas', 'force_fail') -> Always FAILS with a specific error.
+    - No failure pattern in title -> Always SUCCEEDS.
     """
-    # Extract searchable content (case-insensitive)
     title = artifact_data.get('title', '').lower()
-    description = artifact_data.get('description', '').lower()
-    keywords = [k.lower() for k in artifact_data.get('keywords', [])]
-    
-    logger.info(f"🔍 Analyzing artifact for test patterns...")
-    logger.debug(f"Title: {title}")
-    logger.debug(f"Keywords: {keywords}")
-    
-    # SUCCESS PATTERNS - These always succeed
-    success_patterns = [
-        'test_success', 'force_success', 'should_pass', 
-        'test-pass', 'guarantee_success', 'always_pass'
-    ]
-    
-    for pattern in success_patterns:
-        if pattern in title or pattern in description:
-            logger.info(f"✅ SUCCESS pattern found: '{pattern}' - Forcing success")
-            return True, None
-    
-    # Check keywords for success patterns  
-    success_keywords = ['test-success', 'force-success', 'should-pass']
-    if any(keyword in keywords for keyword in success_keywords):
-        logger.info(f"✅ SUCCESS keyword found - Forcing success")
-        return True, None
-    
-    # FAILURE PATTERNS - These always fail with specific errors
+    logger.info(f"🔍 Analyzing artifact title for test patterns: \"{title}\"")
+
     failure_patterns = {
         'test_gas': 'Insufficient gas fees',
         'force_gas': 'Insufficient gas fees',
         'test_network': 'Network congestion - transaction rejected',
         'force_network': 'Network congestion - transaction rejected',
         'test_timeout': 'Peer connection timeout',
-        'force_timeout': 'Peer connection timeout', 
+        'force_timeout': 'Peer connection timeout',
         'test_invalid': 'Invalid artifact data format',
         'force_invalid': 'Invalid artifact data format',
         'test_fail': 'Blockchain temporarily unavailable',
@@ -111,47 +77,15 @@ def determine_success_from_artifact(artifact_data: Dict[str, Any]) -> tuple[bool
         'test_rejected': 'Transaction rejected by blockchain',
         'force_rejected': 'Transaction rejected by blockchain'
     }
-    
+
     for pattern, error_msg in failure_patterns.items():
-        if pattern in title or pattern in description:
+        if pattern in title:
             logger.info(f"❌ FAILURE pattern found: '{pattern}' - Forcing failure: {error_msg}")
             return False, error_msg
-    
-    # Check keywords for failure patterns
-    failure_keywords = {
-        'test-fail': 'Blockchain temporarily unavailable',
-        'force-fail': 'Blockchain temporarily unavailable', 
-        'test-gas': 'Insufficient gas fees',
-        'test-network': 'Network congestion - transaction rejected'
-    }
-    
-    for keyword in keywords:
-        if keyword in failure_keywords:
-            error_msg = failure_keywords[keyword]
-            logger.info(f"❌ FAILURE keyword found: '{keyword}' - Forcing failure: {error_msg}")
-            return False, error_msg
-    
-    # NO TEST PATTERNS FOUND - Use deterministic random based on artifact ID
-    # This ensures same artifact always gets same result, but still feels random
-    artifact_id = artifact_data.get('artifactId', '')
-    hash_val = int(hashlib.md5(artifact_id.encode()).hexdigest(), 16)
-    success = (hash_val % 100) < 95  # 95% success rate, deterministic per artifact
-    
-    if success:
-        logger.info(f"🎲 No test patterns - Deterministic success for artifact {artifact_id}")
-        return True, None
-    else:
-        # Pick error deterministically based on hash
-        error_options = [
-            'Network congestion - transaction rejected',
-            'Insufficient gas fees', 
-            'Blockchain temporarily unavailable',
-            'Peer connection timeout'
-        ]
-        error_index = hash_val % len(error_options)
-        error_msg = error_options[error_index]
-        logger.info(f"🎲 No test patterns - Deterministic failure for artifact {artifact_id}: {error_msg}")
-        return False, error_msg
+
+    # If no failure patterns are found, default to success.
+    logger.info("✅ No failure patterns found in title. Forcing success.")
+    return True, None
 
 @app.post("/submit-artifact", response_model=ArtifactSubmissionResponse)
 async def submit_artifact(request: ArtifactSubmissionRequest):
@@ -240,7 +174,7 @@ async def root():
             "patterns": "/test-patterns"
         },
         "peer_id": PEER_ID,
-        "default_success_rate": "95%",
+        "default_behavior": "Always SUCCESS unless a failure pattern is in the title",
         "processing_delay": "300ms"
     }
 
@@ -248,22 +182,17 @@ async def root():
 async def get_test_patterns():
     """Get available test patterns for automated testing."""
     return {
-        "description": "Use these patterns in artifact title/description/keywords for predictable results",
-        "success_patterns": {
-            "title_contains": ["test_success", "force_success", "should_pass", "test-pass"],
-            "keywords": ["test-success", "force-success", "should-pass"],
-            "example": "Title: 'TEST_SUCCESS - My Document' → Always succeeds"
-        },
+        "description": "Use these patterns in the artifact title for predictable results. If no pattern is found, the submission will succeed.",
         "failure_patterns": {
             "gas_error": ["test_gas", "force_gas"],
-            "network_error": ["test_network", "force_network"], 
+            "network_error": ["test_network", "force_network"],
             "timeout_error": ["test_timeout", "force_timeout"],
             "invalid_data": ["test_invalid", "force_invalid"],
             "general_failure": ["test_fail", "force_fail"],
             "rejected": ["test_rejected", "force_rejected"],
             "example": "Title: 'TEST_GAS - My Document' → Always fails with gas error"
         },
-        "random_behavior": "No patterns → Deterministic 95% success based on artifact ID"
+        "default_behavior": "No failure pattern in title → Always SUCCEEDS."
     }
 
 @app.get("/stats")
@@ -284,7 +213,7 @@ if __name__ == "__main__":
     logger.info("🚀 Starting Mock Blockchain Peer service...")
     logger.info(f"🔗 Peer ID: {PEER_ID}")
     logger.info("⚡ Test automation enabled - check /test-patterns for usage")
-    logger.info("📊 Default: 95% success rate with 300ms processing delay")
+    logger.info("📊 Default behavior: Always SUCCEED unless a failure pattern is in the title.")
     
     uvicorn.run(
         app,
