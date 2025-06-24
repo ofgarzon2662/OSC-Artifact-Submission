@@ -5,7 +5,7 @@ on:
     paths:
       - 'submission_worker/**'
       - '.github/workflows/submission_worker_tests.yml'
-  pull_request:
+   pull_request:
     paths:
       - 'submission_worker/**'
       - '.github/workflows/submission_worker_tests.yml'
