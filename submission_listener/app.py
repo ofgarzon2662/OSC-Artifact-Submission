@@ -270,3 +270,4 @@ if __name__ == "__main__":
     
     # Start RabbitMQ consumer (main thread)
     start_rabbitmq_consumer() 
+        # Add a test line - Testing CI/CD pipeline
