@@ -1,9 +1,12 @@
+# --- Application Dependencies ---
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 python-multipart==0.0.6
 
 # --- Testing Dependencies ---
+# 'httpx' is a required dependency for FastAPI's TestClient
+httpx>=0.25.0
 requests>=2.30.0,<3.0
 pytest==7.4.3
 pytest-cov==4.1.0 

@@ -1,9 +1,15 @@
 import pytest
 from fastapi.testclient import TestClient
-from .app import app
+from mock_peer.app import app
 
-# Create a TestClient instance for making requests to the FastAPI app
-client = TestClient(app)
+@pytest.fixture(scope="module")
+def client():
+    """
+    A pytest fixture that creates a TestClient for the FastAPI app.
+    The scope="module" means this will only be created once for all tests in this file.
+    """
+    with TestClient(app) as c:
+        yield c
 
 # --- Test Data ---
 SUCCESS_ARTIFACT = {
@@ -17,7 +23,7 @@ SUCCESS_ARTIFACT = {
 
 # --- Unit Tests for Endpoints ---
 
-def test_health_check():
+def test_health_check(client: TestClient):
     """Tests if the /health endpoint returns a 200 OK status."""
     response = client.get("/health")
     assert response.status_code == 200
@@ -25,13 +31,13 @@ def test_health_check():
     assert json_response["status"] == "healthy"
     assert json_response["service"] == "mock-blockchain-peer"
 
-def test_root_endpoint():
+def test_root_endpoint(client: TestClient):
     """Tests the root endpoint for basic service info."""
     response = client.get("/")
     assert response.status_code == 200
     assert "Mock Blockchain Peer" in response.json()["service"]
 
-def test_test_patterns_endpoint():
+def test_test_patterns_endpoint(client: TestClient):
     """Tests the /test-patterns endpoint to ensure it returns the correct documentation."""
     response = client.get("/test-patterns")
     assert response.status_code == 200
@@ -40,7 +46,7 @@ def test_test_patterns_endpoint():
     assert "default_behavior" in json_response
     assert "Always SUCCEEDS" in json_response["default_behavior"]
 
-def test_submission_defaults_to_success():
+def test_submission_defaults_to_success(client: TestClient):
     """
     Tests that a standard artifact submission without any failure patterns in the title
     defaults to a successful response.
@@ -58,15 +64,15 @@ def test_submission_defaults_to_success():
 # It allows us to test all failure cases with a single test function.
 failure_test_cases = [
     ("test_gas", "gas fees"),
-    ("force_network", "network congestion"),
+    ("force_network", "Network congestion"),
     ("test_timeout", "timeout"),
-    ("force_invalid", "invalid artifact data"),
+    ("force_invalid", "Invalid artifact data format"),
     ("test_fail", "temporarily unavailable"),
     ("force_rejected", "rejected by blockchain"),
 ]
 
 @pytest.mark.parametrize("pattern, expected_error", failure_test_cases)
-def test_submission_failure_patterns(pattern, expected_error):
+def test_submission_failure_patterns(client: TestClient, pattern, expected_error):
     """
     Tests various failure patterns in the artifact title.
     This test is parameterized to run once for each case in `failure_test_cases`.
@@ -85,7 +91,7 @@ def test_submission_failure_patterns(pattern, expected_error):
     assert json_response["txId"] is None
     assert expected_error in json_response["error"]
 
-def test_submission_with_empty_title():
+def test_submission_with_empty_title(client: TestClient):
     """Tests that an artifact with a missing or empty title still succeeds."""
     artifact_no_title = {
         "artifactId": "e4b3c2a1-b4c1-4f3b-8c1a-4e3b2a1b4c1f",

@@ -6,3 +6,9 @@ submission_listener/.python-version
 submission_listener/htmlcov
 submission_listener/.pytest_cache
 submission_listener/__pycache__
+mock_peer/venv
+mock_peer/.coverage
+mock_peer/.python-version
+mock_peer/htmlcov
+mock_peer/.pytest_cache
+mock_peer/__pycache__
