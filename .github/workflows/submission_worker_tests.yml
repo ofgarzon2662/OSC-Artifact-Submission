@@ -10,7 +10,7 @@ on:
       - 'submission_worker/**'
       - '.github/workflows/submission_worker_tests.yml'
 jobs:
-  test:
+  test-submission-worker:
     runs-on: ubuntu-latest
 
     defaults:

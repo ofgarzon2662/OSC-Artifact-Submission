@@ -2,6 +2,12 @@ import pytest
 from unittest.mock import patch, MagicMock
 import app
 import json
+import io
+import socket
+import http.server
+import threading
+import time
+import types
 
 @pytest.fixture
 def mock_channel():
@@ -85,4 +91,78 @@ def test_callback_missing_artifact_id(mock_channel):
     method = MagicMock()
     method.delivery_tag = 4
     app.callback(mock_channel, method, None, body)
-    mock_channel.basic_nack.assert_called_once_with(delivery_tag=4, requeue=False) 
+    mock_channel.basic_nack.assert_called_once_with(delivery_tag=4, requeue=False)
+
+def test_health_check_handler_health():
+    handler = app.HealthCheckHandler
+    request = MagicMock()
+    request.makefile.return_value = io.BytesIO()
+    server = MagicMock()
+    output = io.BytesIO()
+    # Create an instance
+    h = handler(request, ('127.0.0.1', 0), server)
+    h.wfile = output
+    h.path = '/health'
+    h.send_response = MagicMock()
+    h.send_header = MagicMock()
+    h.end_headers = MagicMock()
+    # Call the real do_GET
+    h.do_GET()
+    output.seek(0)
+    assert b'healthy' in output.getvalue()
+
+def test_health_check_handler_not_found():
+    handler = app.HealthCheckHandler
+    request = MagicMock()
+    request.makefile.return_value = io.BytesIO()
+    server = MagicMock()
+    output = io.BytesIO()
+    h = handler(request, ('127.0.0.1', 0), server)
+    h.wfile = output
+    h.path = '/bad'
+    h.send_response = MagicMock()
+    h.send_header = MagicMock()
+    h.end_headers = MagicMock()
+    h.do_GET()
+    output.seek(0)
+    assert b'Not Found' in output.getvalue()
+
+def test_start_health_server_error(monkeypatch):
+    # Patch HTTPServer to raise an error and serve_forever to not block
+    class DummyServer:
+        def __init__(self, *a, **kw):
+            raise Exception('fail')
+        def serve_forever(self):
+            pass
+    monkeypatch.setattr(app.http.server, 'HTTPServer', DummyServer)
+    with patch.object(app.logger, 'error') as mock_log:
+        try:
+            app.start_health_server()
+        except Exception:
+            pass
+        mock_log.assert_called()
+
+def test_start_rabbitmq_consumer_connection_error(monkeypatch):
+    # Patch pika.BlockingConnection to raise AMQPConnectionError
+    class DummyAMQPError(Exception): pass
+    monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', DummyAMQPError)
+    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: (_ for _ in ()).throw(DummyAMQPError('fail')))
+    with patch.object(app.logger, 'warning') as mock_warn, \
+         patch.object(app.logger, 'error') as mock_err, \
+         patch('app.time.sleep', return_value=None):
+        app.start_rabbitmq_consumer()
+        assert mock_warn.called or mock_err.called
+
+def test_start_rabbitmq_consumer_success(monkeypatch):
+    # Patch pika.BlockingConnection to succeed and channel.start_consuming to not block
+    mock_conn = MagicMock()
+    mock_chan = MagicMock()
+    mock_chan.start_consuming.side_effect = lambda: None
+    mock_conn.channel.return_value = mock_chan
+    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: mock_conn)
+    monkeypatch.setattr(app.pika, 'PlainCredentials', lambda u, p: None)
+    monkeypatch.setattr(app.pika, 'ConnectionParameters', lambda **kw: None)
+    monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', Exception)
+    with patch.object(app.logger, 'info') as mock_info:
+        app.start_rabbitmq_consumer()
+        assert mock_info.called 
