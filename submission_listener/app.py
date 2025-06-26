@@ -92,6 +92,10 @@ def update_artifact_status(artifact_id, submission_data):
     # Add peerId if present
     if 'peerId' in submission_data:
         patch_data['peerId'] = submission_data['peerId']
+
+    # If the submission failed, include the error message
+    if submission_data['submissionState'] == 'FAILED' and 'error' in submission_data:
+        patch_data['submissionError'] = submission_data['error']
     
     headers = {
         'Content-Type': 'application/json',
