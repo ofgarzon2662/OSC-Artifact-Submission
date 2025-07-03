@@ -104,7 +104,7 @@ async def submit_artifact(request: ArtifactSubmissionRequest):
     
     try:
         # Simulate blockchain processing delay
-        await asyncio.sleep(0.3)  # 300ms delay
+        await asyncio.sleep(5.0)  # 5 second delay
         
         # Determine result based on artifact data patterns
         success, error_msg = determine_success_from_artifact(request.data)
@@ -175,7 +175,7 @@ async def root():
         },
         "peer_id": PEER_ID,
         "default_behavior": "Always SUCCESS unless a failure pattern is in the title",
-        "processing_delay": "300ms"
+        "processing_delay": "5s"
     }
 
 @app.get("/test-patterns")
