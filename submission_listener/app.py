@@ -10,8 +10,9 @@ import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file (only if running locally)
+if os.path.exists('.env'):
+    load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -20,19 +21,56 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables - Updated to match API Gateway expectations
-RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
-RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
-RABBITMQ_USER = os.getenv('RABBITMQ_USER')
-RABBITMQ_PASS = os.getenv('RABBITMQ_PASS')
-RABBITMQ_QUEUE = os.getenv('RABBITMQ_QUEUE', 'artifact.submitted.queue')
-API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://api-gateway:3000/api/artifacts')
-API_KEY = os.getenv('API_KEY', 'a_random_key')
-SERVICE_ROLE = os.getenv('SERVICE_ROLE', 'submitter_listener')
+# Detect environment
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
+IS_DOCKER = os.path.exists('/.dockerenv') or ENVIRONMENT == 'docker'
 
-# Load schema for validation
-with open('/app/schema/artifact.submitted.v1.schema.json', 'r') as f:
-    artifact_submitted_schema = json.load(f)
+# Environment variables with secure defaults
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localhost')
+RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
+RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
+RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
+RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
+
+# API Gateway URL with environment-aware defaults
+if IS_DOCKER:
+    API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://osc-api-gateway:3000/api/v1/artifacts')
+else:
+    API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
+
+# IMPORTANT: Never hardcode real API keys in source code
+SUBMISSION_LISTENER_API_KEY = os.getenv('SUBMISSION_LISTENER_API_KEY', 'test-api-key')
+SUBMISSION_LISTENER_SERVICE_ROLE = os.getenv('SUBMISSION_LISTENER_SERVICE_ROLE', 'submitter_listener')
+
+if SUBMISSION_LISTENER_API_KEY == 'test-api-key' or SUBMISSION_LISTENER_API_KEY == '':
+    logger.warning("SUBMISSION_LISTENER_API_KEY is not set. Set SUBMISSION_LISTENER_API_KEY environment variable.")
+
+# Log environment info
+logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
+logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+logger.info(f"API Gateway: {API_GATEWAY_URL}")
+logger.info(f"SUBMISSION_LISTENER_API_KEY configured: {'***' if SUBMISSION_LISTENER_API_KEY and SUBMISSION_LISTENER_API_KEY != 'test-api-key' else 'NOT SET'}")
+logger.info(f"SUBMISSION_LISTENER_SERVICE_ROLE configured: {SUBMISSION_LISTENER_SERVICE_ROLE}")
+
+def load_schema():
+    """Load the JSON schema from the appropriate path based on environment"""
+    if IS_DOCKER:
+        # Docker path
+        schema_path = '/app/schema/artifact.submitted.v1.schema.json'
+    else:
+        # Local development path
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schema_path = os.path.join(current_dir, 'contracts', 'artifact.submitted.v1.schema.json')
+    
+    if not os.path.exists(schema_path):
+        raise FileNotFoundError(f"Schema file not found at: {schema_path}")
+    
+    logger.info(f"Loading schema from: {schema_path}")
+    with open(schema_path, 'r') as f:
+        return json.load(f)
+
+# Load the schema
+artifact_submitted_schema = load_schema()
 
 def update_artifact_status(artifact_id, submission_data):
     """
@@ -47,23 +85,28 @@ def update_artifact_status(artifact_id, submission_data):
         'submittedAt': submission_data['submittedAt']
     }
     
-    # Include blockchainTxId if present (should be there if submissionState is SUBMITTED)
+    # Include blockchainTxId if present (should be there if submissionState is SUCCESS)
     if 'blockchainTxId' in submission_data:
         patch_data['blockchainTxId'] = submission_data['blockchainTxId']
     
     # Add peerId if present
     if 'peerId' in submission_data:
         patch_data['peerId'] = submission_data['peerId']
+
+    # If the submission failed, include the error message
+    if submission_data['submissionState'] == 'FAILED' and 'error' in submission_data:
+        patch_data['submissionError'] = submission_data['error']
     
     headers = {
         'Content-Type': 'application/json',
-        'X-API-Key': API_KEY,
-        'X-Service-Role': SERVICE_ROLE,
+        'X-API-Key': SUBMISSION_LISTENER_API_KEY,
+        'X-Service-Role': SUBMISSION_LISTENER_SERVICE_ROLE,
         'User-Agent': 'submission-listener/1.0'
     }
     
     try:
         logger.info(f"Sending PATCH request to {url} for artifact {artifact_id}")
+        logger.debug(f"Request payload: {json.dumps(patch_data, indent=2)}")
         response = requests.patch(url, json=patch_data, headers=headers, timeout=10)
         response.raise_for_status()
         
@@ -101,7 +144,7 @@ def callback(ch, method, properties, body):
         # Validate message against schema
         if not validate_message(message):
             logger.error("Message validation failed, rejecting message")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue validation errors
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
         
         # Extract artifact ID and update status
@@ -121,17 +164,16 @@ def callback(ch, method, properties, body):
             
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue bad JSON
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except KeyError as e:
         logger.error(f"Missing required field in message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue bad structure
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except Exception as e:
         logger.error(f"Unexpected error processing message: {str(e)}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)  # Don't requeue unexpected errors
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 def start_rabbitmq_consumer():
     """Connect to RabbitMQ and start consuming messages."""
-    # Retry connection if RabbitMQ is not immediately available
     connection = None
     retry_count = 0
     max_retries = 30  # 2.5 minutes of retries
@@ -162,15 +204,15 @@ def start_rabbitmq_consumer():
     channel = connection.channel()
     
     # Ensure queue exists (in case it wasn't created by definitions.json)
-    channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue=RABBITMQ_QUEUE, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMITTED, on_message_callback=callback)
     
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE}")
+    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMITTED}")
     logger.info(f"Using API Gateway URL: {API_GATEWAY_URL}")
-    logger.info(f"Service role: {SERVICE_ROLE}")
+    logger.info(f"Service role: {SUBMISSION_LISTENER_SERVICE_ROLE}")
     
     try:
         channel.start_consuming()
@@ -194,8 +236,13 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
             health_data = {
                 "status": "healthy",
                 "service": "submission-listener",
+                "environment": "Docker" if IS_DOCKER else "Local",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "rabbitmq_queue": RABBITMQ_QUEUE,
+                "rabbitmq": {
+                    "host": RABBITMQ_HOST,
+                    "port": RABBITMQ_PORT,
+                    "queue": RABBITMQ_QUEUE_SUBMITTED
+                },
                 "api_gateway_url": API_GATEWAY_URL
             }
             self.wfile.write(json.dumps(health_data).encode())
@@ -227,3 +274,4 @@ if __name__ == "__main__":
     
     # Start RabbitMQ consumer (main thread)
     start_rabbitmq_consumer() 
+        # Add a test line - Testing CI/CD pipeline
