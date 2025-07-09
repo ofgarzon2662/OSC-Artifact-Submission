@@ -28,7 +28,8 @@ app = FastAPI(
 # Request/Response models
 class ArtifactSubmissionRequest(BaseModel):
     artifactId: str
-    data: Dict[str, Any]
+    manifest: list
+    title: str
     timestamp: str
 
 class ArtifactSubmissionResponse(BaseModel):
@@ -51,7 +52,7 @@ startup_time = time.time()
 # Simulated peer ID (in real blockchain, this would be the actual peer ID)
 PEER_ID = "12D3KooWBhxQ7uXeY9zF8qG5nM4rL3pT6vN8wS2cK9jH1fX7yR4e"
 
-def determine_success_from_artifact(artifact_data: Dict[str, Any]) -> tuple[bool, str]:
+def determine_success_from_artifact(title: str) -> tuple[bool, str]:
     """
     Determine submission success based on artifact title patterns.
     This enables deterministic testing without container restarts.
@@ -60,7 +61,7 @@ def determine_success_from_artifact(artifact_data: Dict[str, Any]) -> tuple[bool
     - Title contains a failure pattern (e.g., 'test_gas', 'force_fail') -> Always FAILS with a specific error.
     - No failure pattern in title -> Always SUCCEEDS.
     """
-    title = artifact_data.get('title', '').lower()
+    title = title.lower() if title else ''
     logger.info(f"🔍 Analyzing artifact title for test patterns: \"{title}\"")
 
     failure_patterns = {
@@ -93,10 +94,8 @@ async def submit_artifact(request: ArtifactSubmissionRequest):
     Submit an artifact to the blockchain (simulated).
     
     Supports test automation through artifact data patterns:
-    - Title/Description with 'test_success' → Always succeeds
-    - Title/Description with 'test_gas' → Always fails with gas error
-    - Keywords with 'test-success' → Always succeeds
-    - No patterns → Deterministic random (95% success)
+    - Title containing a failure pattern (e.g., 'test_gas') → Always fails with a specific error.
+    - No failure pattern in title → Always succeeds.
     """
     start_time = time.time()
     
@@ -107,7 +106,7 @@ async def submit_artifact(request: ArtifactSubmissionRequest):
         await asyncio.sleep(5.0)  # 5 second delay
         
         # Determine result based on artifact data patterns
-        success, error_msg = determine_success_from_artifact(request.data)
+        success, error_msg = determine_success_from_artifact(request.title)
         processing_time = time.time() - start_time
         
         if success:

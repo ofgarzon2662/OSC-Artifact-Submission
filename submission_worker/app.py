@@ -97,10 +97,26 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
     logger.info(f"Processing artifact submission for ID: {artifact_id}")
     
     try:
-        # Call the mock peer to submit the artifact
+        # Extract manifest and title from the artifact data
+        manifest = artifact_data.get('manifest')
+        title = artifact_data.get('title')
+
+        # Validate that the manifest exists
+        if manifest is None:
+            error_msg = f"Missing 'manifest' in message for artifact {artifact_id}"
+            logger.error(error_msg)
+            # Publish failure event
+            publish_artifact_submitted(channel, artifact_id, {
+                'success': False,
+                'error': error_msg
+            })
+            return False
+
+        # Call the mock peer to submit the artifact with the corrected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
-            'data': artifact_data,
+            'manifest': manifest,
+            'title': title,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         
