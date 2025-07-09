@@ -3,11 +3,7 @@ from unittest.mock import patch, MagicMock
 import app
 import json
 import io
-import socket
 import http.server
-import threading
-import time
-import types
 
 @pytest.fixture
 def mock_channel():
@@ -29,7 +25,7 @@ def submission_result_failure():
 def mock_artifact_data():
     return {
         "title": "Test Artifact",
-        "manifest": [{"filename": "file1.txt", "hash": "123", "algorithm": "sha256"}]
+        "manifest": [{"filename": "file1.txt", "hash": "123"}]
     }
 
 def test_publish_artifact_submitted_success(mock_channel, artifact_id, submission_result_success):
@@ -67,22 +63,34 @@ def test_process_artifact_submission_failure(mock_channel, artifact_id, mock_art
             mock_submit.assert_called_once()
             mock_publish.assert_called_once()
 
+def test_process_artifact_submission_missing_manifest(mock_channel, artifact_id):
+    """Test submission processing when manifest is missing from the message."""
+    with patch("app.publish_artifact_submitted") as mock_publish:
+        result = app.process_artifact_submission(mock_channel, artifact_id, {"title": "no manifest here"})
+        assert result is False
+        mock_publish.assert_called_once()
+        args, kwargs = mock_publish.call_args
+        assert args[2]['success'] is False
+        assert "Missing 'manifest'" in args[2]['error']
+
 def test_callback_success(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "foo": "bar"}
+    message = {"artifactId": artifact_id, "manifest": [], "title": "test"}
     body = json.dumps(message).encode()
     method = MagicMock()
     method.delivery_tag = 1
-    with patch("app.process_artifact_submission", return_value=True):
+    with patch("app.process_artifact_submission", return_value=True) as mock_process:
         app.callback(mock_channel, method, None, body)
+        mock_process.assert_called_once_with(mock_channel, artifact_id, message)
         mock_channel.basic_ack.assert_called_once_with(delivery_tag=1)
 
 def test_callback_failure(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "foo": "bar"}
+    message = {"artifactId": artifact_id, "manifest": [], "title": "test"}
     body = json.dumps(message).encode()
     method = MagicMock()
     method.delivery_tag = 2
-    with patch("app.process_artifact_submission", return_value=False):
+    with patch("app.process_artifact_submission", return_value=False) as mock_process:
         app.callback(mock_channel, method, None, body)
+        mock_process.assert_called_once_with(mock_channel, artifact_id, message)
         mock_channel.basic_nack.assert_called_once_with(delivery_tag=2, requeue=False)
 
 def test_callback_invalid_json(mock_channel):
@@ -106,14 +114,12 @@ def test_health_check_handler_health():
     request.makefile.return_value = io.BytesIO()
     server = MagicMock()
     output = io.BytesIO()
-    # Create an instance
     h = handler(request, ('127.0.0.1', 0), server)
     h.wfile = output
     h.path = '/health'
     h.send_response = MagicMock()
     h.send_header = MagicMock()
     h.end_headers = MagicMock()
-    # Call the real do_GET
     h.do_GET()
     output.seek(0)
     assert b'healthy' in output.getvalue()
@@ -135,7 +141,6 @@ def test_health_check_handler_not_found():
     assert b'Not Found' in output.getvalue()
 
 def test_start_health_server_error(monkeypatch):
-    # Patch HTTPServer to raise an error and serve_forever to not block
     class DummyServer:
         def __init__(self, *a, **kw):
             raise Exception('fail')
@@ -150,7 +155,6 @@ def test_start_health_server_error(monkeypatch):
         mock_log.assert_called()
 
 def test_start_rabbitmq_consumer_connection_error(monkeypatch):
-    # Patch pika.BlockingConnection to raise AMQPConnectionError
     class DummyAMQPError(Exception): pass
     monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', DummyAMQPError)
     monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: (_ for _ in ()).throw(DummyAMQPError('fail')))
@@ -161,7 +165,6 @@ def test_start_rabbitmq_consumer_connection_error(monkeypatch):
         assert mock_warn.called or mock_err.called
 
 def test_start_rabbitmq_consumer_success(monkeypatch):
-    # Patch pika.BlockingConnection to succeed and channel.start_consuming to not block
     mock_conn = MagicMock()
     mock_chan = MagicMock()
     mock_chan.start_consuming.side_effect = lambda: None
@@ -172,4 +175,34 @@ def test_start_rabbitmq_consumer_success(monkeypatch):
     monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', Exception)
     with patch.object(app.logger, 'info') as mock_info:
         app.start_rabbitmq_consumer()
-        assert mock_info.called 
+        assert mock_info.called
+
+def test_callback_unexpected_error(mock_channel):
+    """Test callback handling of unexpected errors (e.g., malformed message structure)."""
+    body = json.dumps("a string, not a dict").encode()
+    method = MagicMock()
+    method.delivery_tag = 5
+    with patch.object(app.logger, 'error') as mock_log:
+        app.callback(mock_channel, method, None, body)
+        mock_channel.basic_nack.assert_called_once_with(delivery_tag=5, requeue=False)
+        mock_log.assert_any_call("Unexpected error processing message: 'str' object has no attribute 'get'")
+
+def test_publish_artifact_submitted_exception(mock_channel, artifact_id, submission_result_success):
+    """Test exception handling during artifact submission publishing."""
+    with patch("json.dumps", side_effect=TypeError("JSON serialization failed")):
+        with pytest.raises(TypeError, match="JSON serialization failed"):
+            app.publish_artifact_submitted(mock_channel, artifact_id, submission_result_success)
+
+def test_start_rabbitmq_consumer_keyboard_interrupt(monkeypatch):
+    """Test that KeyboardInterrupt stops the consumer."""
+    mock_conn = MagicMock()
+    mock_chan = MagicMock()
+    mock_chan.start_consuming.side_effect = KeyboardInterrupt
+    mock_conn.channel.return_value = mock_chan
+    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: mock_conn)
+    
+    with patch.object(app.logger, 'info') as mock_log:
+        app.start_rabbitmq_consumer()
+        mock_log.assert_any_call("Shutting down consumer...")
+        mock_chan.stop_consuming.assert_called_once()
+        mock_conn.close.assert_called_once()
