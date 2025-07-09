@@ -197,8 +197,11 @@ def test_start_rabbitmq_consumer_keyboard_interrupt(monkeypatch):
     """Test that KeyboardInterrupt stops the consumer."""
     mock_conn = MagicMock()
     mock_chan = MagicMock()
+    # Simulate KeyboardInterrupt being raised when start_consuming is called
     mock_chan.start_consuming.side_effect = KeyboardInterrupt
     mock_conn.channel.return_value = mock_chan
+    # Configure the mock to report that the connection is open
+    mock_conn.is_closed = False
     monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: mock_conn)
     
     with patch.object(app.logger, 'info') as mock_log:
