@@ -25,6 +25,13 @@ def submission_result_success():
 def submission_result_failure():
     return {"success": False, "error": "fail"}
 
+@pytest.fixture
+def mock_artifact_data():
+    return {
+        "title": "Test Artifact",
+        "manifest": [{"filename": "file1.txt", "hash": "123", "algorithm": "sha256"}]
+    }
+
 def test_publish_artifact_submitted_success(mock_channel, artifact_id, submission_result_success):
     app.publish_artifact_submitted(mock_channel, artifact_id, submission_result_success)
     args, kwargs = mock_channel.basic_publish.call_args
@@ -44,18 +51,18 @@ def test_publish_artifact_submitted_failure(mock_channel, artifact_id, submissio
     assert body["error"] == "fail"
     assert "blockchainTxId" not in body
 
-def test_process_artifact_submission_success(mock_channel, artifact_id):
+def test_process_artifact_submission_success(mock_channel, artifact_id, mock_artifact_data):
     with patch.object(app.peer_client, "submit_artifact", return_value={"success": True, "txId": "tx-1"}) as mock_submit:
         with patch("app.publish_artifact_submitted") as mock_publish:
-            result = app.process_artifact_submission(mock_channel, artifact_id, {"foo": "bar"})
+            result = app.process_artifact_submission(mock_channel, artifact_id, mock_artifact_data)
             assert result is True
             mock_submit.assert_called_once()
             mock_publish.assert_called_once()
 
-def test_process_artifact_submission_failure(mock_channel, artifact_id):
+def test_process_artifact_submission_failure(mock_channel, artifact_id, mock_artifact_data):
     with patch.object(app.peer_client, "submit_artifact", side_effect=Exception("fail")) as mock_submit:
         with patch("app.publish_artifact_submitted") as mock_publish:
-            result = app.process_artifact_submission(mock_channel, artifact_id, {"foo": "bar"})
+            result = app.process_artifact_submission(mock_channel, artifact_id, mock_artifact_data)
             assert result is False
             mock_submit.assert_called_once()
             mock_publish.assert_called_once()
