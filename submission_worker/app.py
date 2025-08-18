@@ -100,6 +100,7 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         # Extract manifest and title from the artifact data
         manifest = artifact_data.get('manifest')
         title = artifact_data.get('title')
+        footprint = artifact_data.get('footprint')
 
         # Validate that the manifest exists
         if manifest is None:
@@ -112,11 +113,23 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
             })
             return False
 
+        # Validate that the footprint exists and is a 64-character hex string
+        if footprint is None or not (isinstance(footprint, str) and len(footprint) == 64 and all(c in '0123456789abcdefABCDEF' for c in footprint)):
+            error_msg = f"Missing or invalid 'footprint' in message for artifact {artifact_id}"
+            logger.error(error_msg)
+            # Publish failure event
+            publish_artifact_submitted(channel, artifact_id, {
+                'success': False,
+                'error': error_msg
+            })
+            return False
+ 
         # Call the mock peer to submit the artifact with the corrected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
             'manifest': manifest,
             'title': title,
+            'footprint': footprint,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
         

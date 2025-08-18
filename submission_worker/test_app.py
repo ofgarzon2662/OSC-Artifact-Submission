@@ -25,7 +25,8 @@ def submission_result_failure():
 def mock_artifact_data():
     return {
         "title": "Test Artifact",
-        "manifest": [{"filename": "file1.txt", "hash": "123"}]
+        "manifest": [{"filename": "file1.txt", "hash": "123"}],
+        "footprint": "f" * 64
     }
 
 def test_publish_artifact_submitted_success(mock_channel, artifact_id, submission_result_success):
@@ -74,7 +75,7 @@ def test_process_artifact_submission_missing_manifest(mock_channel, artifact_id)
         assert "Missing 'manifest'" in args[2]['error']
 
 def test_callback_success(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "manifest": [], "title": "test"}
+    message = {"artifactId": artifact_id, "manifest": [], "title": "test", "footprint": "f" * 64}
     body = json.dumps(message).encode()
     method = MagicMock()
     method.delivery_tag = 1
@@ -84,7 +85,7 @@ def test_callback_success(mock_channel, artifact_id):
         mock_channel.basic_ack.assert_called_once_with(delivery_tag=1)
 
 def test_callback_failure(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "manifest": [], "title": "test"}
+    message = {"artifactId": artifact_id, "manifest": [], "title": "test", "footprint": "f" * 64}
     body = json.dumps(message).encode()
     method = MagicMock()
     method.delivery_tag = 2
