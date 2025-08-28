@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { Wallets, Gateway, GatewayOptions, Network, Contract, X509Identity } from 'fabric-network';
 import * as grpc from '@grpc/grpc-js';
+import { connect, signers, Contract, Network, Gateway } from '@hyperledger/fabric-gateway';
+import { createPrivateKey } from 'node:crypto';
 
 type ConnectArgs = {
   walletPath: string;
@@ -13,100 +14,41 @@ type ConnectArgs = {
   tlsCertPath: string; // optional if using insecure
   identityFilePath?: string; // optional direct path to identity file
   sslOverride?: string; // optional TLS server name override (SNI)
-  discoveryEnabled?: boolean;
-  discoveryAsLocalhost?: boolean;
+  discoveryEnabled?: boolean; // retained for compatibility (not used by gateway connect)
+  discoveryAsLocalhost?: boolean; // retained for compatibility (not used by gateway connect)
 };
 
 export async function connectGateway(args: ConnectArgs) {
-  const primaryWallet = await Wallets.newFileSystemWallet(args.walletPath);
-  let wallet = primaryWallet;
-  let identity = await primaryWallet.get(args.identityLabel);
+  // Load identity from wallet-like JSON file(s)
+  const candidates: string[] = [];
+  if (args.identityFilePath) candidates.push(args.identityFilePath);
+  candidates.push(path.join(args.walletPath, args.mspId, `${args.identityLabel}.id`));
+  candidates.push(path.join(args.walletPath, `${args.identityLabel}.id`));
 
-  const ensureWritableWallet = async () => {
-    const walletStorePath = process.env.WALLET_STORE_PATH || '/tmp/wallet';
-    fs.mkdirSync(walletStorePath, { recursive: true });
-    if (!wallet || (wallet as any).storePath !== walletStorePath) {
-      wallet = await Wallets.newFileSystemWallet(walletStorePath);
-    }
-    return wallet;
-  };
-
-  const rehydrateIntoWritableWallet = async (src: any) => {
-    const cert = src?.credentials?.certificate || src?.certificate || src?.cert;
-    const key = src?.credentials?.privateKey || src?.privateKey || src?.key;
-    if (cert && key) {
-      const x509: X509Identity = {
-        credentials: { certificate: cert, privateKey: key },
-        mspId: args.mspId,
-        type: 'X.509'
-      };
-      await ensureWritableWallet();
-      await wallet.put(args.identityLabel, { ...(x509 as any), version: 1 } as any);
-      return await wallet.get(args.identityLabel);
-    }
-    return undefined;
-  };
-
-  // If an identity exists but is not a proper wallet entry (e.g., missing version),
-  // rehydrate it into a writable wallet with a proper structure.
-  if (identity && !(identity as any).version) {
-    identity = await rehydrateIntoWritableWallet(identity);
-  }
-  if (!identity) {
-    // Auto-import from identity file structure for automation
-    const candidates: string[] = [];
-    if (args.identityFilePath) candidates.push(args.identityFilePath);
-    candidates.push(path.join(args.walletPath, args.mspId, `${args.identityLabel}.id`));
-    candidates.push(path.join(args.walletPath, `${args.identityLabel}.id`));
-
-    let imported = false;
-    for (const p of candidates) {
+  let certificatePem = '';
+  let privateKeyPem = '';
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const raw = fs.readFileSync(p, 'utf8');
       try {
-        if (fs.existsSync(p)) {
-          const raw = fs.readFileSync(p, 'utf8');
-          let cert = '';
-          let key = '';
-          // Try JSON first: { certificate, privateKey } OR { cert, key }
-          try {
-            const j = JSON.parse(raw);
-            // Support multiple JSON shapes:
-            // { certificate, privateKey } OR { cert, key } OR { credentials: { certificate, privateKey } }
-            cert = j.certificate || j.cert || (j.credentials && (j.credentials.certificate || j.credentials.cert)) || '';
-            key = j.privateKey || j.key || (j.credentials && (j.credentials.privateKey || j.credentials.key)) || '';
-          } catch {
-            // Not JSON: attempt to split PEM blocks (very naive fallback)
-            // Expect both CERT and KEY present concatenated
-            const certMatch = raw.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
-            const keyMatch = raw.match(/-----BEGIN (?:PRIVATE KEY|EC PRIVATE KEY)-----[\s\S]*?-----END (?:PRIVATE KEY|EC PRIVATE KEY)-----/);
-            cert = certMatch ? certMatch[0] : '';
-            key = keyMatch ? keyMatch[0] : '';
-          }
-          if (!cert || !key) {
-            continue;
-          }
-          const x509: X509Identity = {
-            credentials: { certificate: cert, privateKey: key },
-            mspId: args.mspId,
-            type: 'X.509'
-          };
-          // Some wallet stores expect an explicit version marker
-          // Store imported identity in a writable internal wallet to avoid read-only mounts
-          await ensureWritableWallet();
-          await wallet.put(args.identityLabel, { ...(x509 as any), version: 1 } as any);
-          identity = await wallet.get(args.identityLabel);
-          imported = true;
-          break;
-        }
-      } catch (e) {
-        // continue trying next candidate
+        const j = JSON.parse(raw);
+        certificatePem = j.certificate || j.cert || (j.credentials && (j.credentials.certificate || j.credentials.cert)) || '';
+        privateKeyPem = j.privateKey || j.key || (j.credentials && (j.credentials.privateKey || j.credentials.key)) || '';
+      } catch {
+        const certMatch = raw.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
+        const keyMatch = raw.match(/-----BEGIN (?:PRIVATE KEY|EC PRIVATE KEY)-----[\s\S]*?-----END (?:PRIVATE KEY|EC PRIVATE KEY)-----/);
+        certificatePem = certMatch ? certMatch[0] : '';
+        privateKeyPem = keyMatch ? keyMatch[0] : '';
       }
-    }
-    if (!imported || !identity) {
-      throw new Error(`Identity '${args.identityLabel}' not found in wallet at ${args.walletPath} and no importable identity file located`);
-    }
+      if (certificatePem && privateKeyPem) break;
+    } catch {}
+  }
+  if (!certificatePem || !privateKeyPem) {
+    throw new Error(`Identity '${args.identityLabel}' not found or invalid in ${args.walletPath}`);
   }
 
-  // gRPC connection
+  // Build TLS gRPC client
   let creds: grpc.ChannelCredentials;
   if (args.tlsCertPath) {
     const tlsCert = fs.readFileSync(path.resolve(args.tlsCertPath));
@@ -121,25 +63,30 @@ export async function connectGateway(args: ConnectArgs) {
   }
   const client = new (grpc as any).Client(args.peerEndpoint, creds, channelOptions);
 
-  const gateway = new Gateway();
-  await gateway.connect(client as any, {
-    wallet,
-    identity: args.identityLabel,
-    discovery: {
-      enabled: args.discoveryEnabled ?? false,
-      asLocalhost: args.discoveryAsLocalhost ?? true
-    }
-  } as GatewayOptions);
+  // Gateway identity and signer
+  const identity = { mspId: args.mspId, credentials: Buffer.from(certificatePem) };
+  const privateKey = createPrivateKey(privateKeyPem);
+  const signer = signers.newPrivateKeySigner(privateKey);
 
-  const network: Network = await gateway.getNetwork(args.channelName);
-  const contract: Contract = network.getContract(args.chaincodeName);
+  const gateway = connect({
+    client: client as any,
+    identity,
+    signer,
+    evaluateOptions: () => ({ deadline: Date.now() + 5000 }),
+    endorseOptions: () => ({ deadline: Date.now() + 15000 }),
+    submitOptions: () => ({ deadline: Date.now() + 5000 }),
+    commitStatusOptions: () => ({ deadline: Date.now() + 60000 })
+  });
+
+  const network: Network = gateway.getNetwork(args.channelName) as any;
+  const contract: Contract = network.getContract(args.chaincodeName) as any;
 
   return {
     gateway,
     network,
     contract,
     chaincodeName: args.chaincodeName,
-    close: () => gateway.disconnect()
+    close: () => gateway.close()
   };
 }
 
@@ -148,7 +95,7 @@ type SubmitOptions = {
   updateFn?: string;
   submitArgsMode?: 'id+data' | 'json' | 'data-only';
   updateArgsMode?: 'id+patch' | 'json';
-  endorsingOrgs?: string[];
+  endorsingOrgs?: string[]; // retained; gateway may ignore if not supported in this client
 };
 
 export async function submitTxIfReal(
@@ -185,28 +132,21 @@ export async function submitTxIfReal(
     }
   }
 
-  // Help discovery by declaring interest in this chaincode
+  // Build, endorse, and submit using Fabric Gateway
   try {
-    if (conn?.contract && conn?.chaincodeName && (conn as any).contract.addDiscoveryInterest) {
-      (conn as any).contract.addDiscoveryInterest({ name: conn.chaincodeName });
+    const proposal = (conn.contract as any).newProposal(fn, { arguments: args });
+    const endorsed = await (proposal as any).endorse();
+    const txId = (endorsed as any).transactionId as string;
+    const commit = await (endorsed as any).submit();
+    const status = await (commit as any).getStatus();
+    if (status && typeof status.code === 'number' && status.code !== 0) {
+      throw new Error(`Commit failed with status code ${status.code}`);
     }
-  } catch {}
-
-  const transaction = conn.contract.createTransaction(fn);
-  if (options?.endorsingOrgs && options.endorsingOrgs.length > 0 && (transaction as any).setEndorsingOrganizations) {
-    (transaction as any).setEndorsingOrganizations(...options.endorsingOrgs);
-  }
-  const txId = transaction.getTransactionId();
-  try {
-    await transaction.submit(...args);
+    return { txId, committedAt: now };
   } catch (e: any) {
-    const responses = Array.isArray(e?.responses)
-      ? e.responses.map((r: any) => r?.response?.message || r?.message || r)
-      : undefined;
-    const msg = responses && responses.length > 0 ? responses : (e?.message || String(e));
-    throw new Error(`Fabric submit failed for ${fn}: ${JSON.stringify(msg)}`);
+    const msg = e?.message || String(e);
+    throw new Error(`Fabric submit failed for ${fn}: ${msg}`);
   }
-  return { txId, committedAt: now };
 }
 
 

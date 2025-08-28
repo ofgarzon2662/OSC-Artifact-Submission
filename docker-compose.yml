@@ -44,22 +44,21 @@ services:
       - MSP_ID=${MSP_ID:-Org1MSP}
       - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
       - IDENTITY_FILE_PATH=/wallets/Org1MSP/svc-org1.id
-      - TLS_CERT_PATH=/tls/peers-bundle.crt
+      - TLS_CERT_PATH=/tls/peer0-org1-ca.crt
+      - TLS_OVERRIDE_HOSTNAME=peer0.org1.example.com
       - UPDATE_ARGS_MODE=id+patch  
       - SUBMIT_FN=CreateArtifact
       - SUBMIT_ARGS_MODE=data-only 
       - PEER_ENDPOINT=peer0.org1.example.com:7051
       - FABRIC_CHANNEL=mychannel
       - FABRIC_CHAINCODE=oscis
-      - DISCOVERY_ENABLED=true
-      - DISCOVERY_AS_LOCALHOST=false
       - ENDORSING_ORGS=Org1MSP,Org2MSP
 
     ports:
       - "4000:4000"
     volumes:
-    - ./fabric-bridge/wallets:/wallets:ro
-    - ./fabric-bridge/peers-bundle.crt:/tls/peers-bundle.crt:ro
+    - /home/ofgarzon/Projects/GithubProjects/OSC-Network/wallets:/wallets:ro
+    - /home/ofgarzon/Projects/GithubProjects/OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
     networks:
       - osc-api-services-network
       - fabric-network
