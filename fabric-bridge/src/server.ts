@@ -20,6 +20,15 @@ const FABRIC_REAL_MODE = /^true$/i.test(process.env.FABRIC_REAL_MODE || 'true');
 const PEER_ENDPOINT = process.env.PEER_ENDPOINT || 'localhost:7051';
 const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
 const IDENTITY_FILE_PATH = process.env.IDENTITY_FILE_PATH || '';
+const TLS_OVERRIDE_HOSTNAME = process.env.TLS_OVERRIDE_HOSTNAME || '';
+const DISCOVERY_ENABLED = /^true$/i.test(process.env.DISCOVERY_ENABLED || 'true');
+const DISCOVERY_AS_LOCALHOST = /^true$/i.test(process.env.DISCOVERY_AS_LOCALHOST || 'false');
+
+// Chaincode call configuration
+const SUBMIT_FN = process.env.SUBMIT_FN || 'SubmitArtifact';
+const UPDATE_FN = process.env.UPDATE_FN || 'UpdateArtifact';
+const SUBMIT_ARGS_MODE = (process.env.SUBMIT_ARGS_MODE as any) || 'id+data'; // 'id+data' | 'json' | 'data-only'
+const UPDATE_ARGS_MODE = (process.env.UPDATE_ARGS_MODE as any) || 'id+patch'; // 'id+patch' | 'json'
 
 // Minimal request schemas
 const artifactDataSchema = Joi.object({
@@ -67,10 +76,18 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
       chaincodeName: FABRIC_CHAINCODE,
       peerEndpoint: PEER_ENDPOINT,
       tlsCertPath: TLS_CERT_PATH,
-      identityFilePath: IDENTITY_FILE_PATH
+      identityFilePath: IDENTITY_FILE_PATH,
+      sslOverride: TLS_OVERRIDE_HOSTNAME,
+      discoveryEnabled: DISCOVERY_ENABLED,
+      discoveryAsLocalhost: DISCOVERY_AS_LOCALHOST
     });
     try {
-      const { txId, committedAt } = await submitTxIfReal(gateway, action, payload);
+      const { txId, committedAt } = await submitTxIfReal(gateway, action, payload, {
+        submitFn: SUBMIT_FN as any,
+        updateFn: UPDATE_FN as any,
+        submitArgsMode: SUBMIT_ARGS_MODE as any,
+        updateArgsMode: UPDATE_ARGS_MODE as any
+      });
       return { txId, committedAt, peer: FABRIC_PEER };
     } finally {
       gateway.close();

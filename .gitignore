@@ -20,3 +20,4 @@ fabric-bridge/node_modules
 fabric-bridge/dist
 fabric-bridge/.env
 fabric-bridge/wallets
+fabric-bridge/peer0-org1-ca-crt

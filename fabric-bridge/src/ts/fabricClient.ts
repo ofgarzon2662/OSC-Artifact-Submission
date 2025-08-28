@@ -12,6 +12,9 @@ type ConnectArgs = {
   peerEndpoint: string;
   tlsCertPath: string; // optional if using insecure
   identityFilePath?: string; // optional direct path to identity file
+  sslOverride?: string; // optional TLS server name override (SNI)
+  discoveryEnabled?: boolean;
+  discoveryAsLocalhost?: boolean;
 };
 
 export async function connectGateway(args: ConnectArgs) {
@@ -111,13 +114,21 @@ export async function connectGateway(args: ConnectArgs) {
   } else {
     creds = grpc.credentials.createInsecure();
   }
-  const client = new (grpc as any).Client(args.peerEndpoint, creds);
+  const channelOptions: Record<string, any> = {};
+  if (args.sslOverride) {
+    channelOptions['grpc.ssl_target_name_override'] = args.sslOverride;
+    channelOptions['grpc.default_authority'] = args.sslOverride;
+  }
+  const client = new (grpc as any).Client(args.peerEndpoint, creds, channelOptions);
 
   const gateway = new Gateway();
   await gateway.connect(client as any, {
     wallet,
     identity: args.identityLabel,
-    discovery: { enabled: false, asLocalhost: true }
+    discovery: {
+      enabled: args.discoveryEnabled ?? false,
+      asLocalhost: args.discoveryAsLocalhost ?? true
+    }
   } as GatewayOptions);
 
   const network: Network = await gateway.getNetwork(args.channelName);
@@ -131,17 +142,45 @@ export async function connectGateway(args: ConnectArgs) {
   };
 }
 
-export async function submitTxIfReal(conn: any, action: 'submit'|'update', payload: any) {
+type SubmitOptions = {
+  submitFn?: string;
+  updateFn?: string;
+  submitArgsMode?: 'id+data' | 'json' | 'data-only';
+  updateArgsMode?: 'id+patch' | 'json';
+};
+
+export async function submitTxIfReal(
+  conn: any,
+  action: 'submit' | 'update',
+  payload: any,
+  options?: SubmitOptions
+) {
   const now = new Date().toISOString();
+  const submitFn = options?.submitFn || 'SubmitArtifact';
+  const updateFn = options?.updateFn || 'UpdateArtifact';
+  const submitArgsMode = options?.submitArgsMode || 'id+data';
+  const updateArgsMode = options?.updateArgsMode || 'id+patch';
+
   let fn = '';
   let args: string[] = [];
   if (action === 'submit') {
-    fn = 'SubmitArtifact';
-    // Pass both artifactId and data to match typical chaincode signatures
-    args = [payload.artifactId, JSON.stringify(payload.data)];
+    fn = submitFn;
+    if (submitArgsMode === 'json') {
+      args = [JSON.stringify({ artifactId: payload.artifactId, data: payload.data })];
+    } else if (submitArgsMode === 'data-only') {
+      // Inject id field expected by chaincode CreateArtifact
+      const merged = { ...(payload.data || {}), id: payload.artifactId };
+      args = [JSON.stringify(merged)];
+    } else {
+      args = [payload.artifactId, JSON.stringify(payload.data)];
+    }
   } else {
-    fn = 'UpdateArtifact';
-    args = [payload.artifactId, JSON.stringify(payload.patch || {})];
+    fn = updateFn;
+    if (updateArgsMode === 'json') {
+      args = [JSON.stringify({ artifactId: payload.artifactId, patch: payload.patch || {} })];
+    } else {
+      args = [payload.artifactId, JSON.stringify(payload.patch || {})];
+    }
   }
 
   const transaction = conn.contract.createTransaction(fn);
@@ -149,8 +188,11 @@ export async function submitTxIfReal(conn: any, action: 'submit'|'update', paylo
   try {
     await transaction.submit(...args);
   } catch (e: any) {
-    const details = e?.details || e?.responses || e?.message || e;
-    throw new Error(`Fabric submit failed for ${fn}: ${JSON.stringify(details)}`);
+    const responses = Array.isArray(e?.responses)
+      ? e.responses.map((r: any) => r?.response?.message || r?.message || r)
+      : undefined;
+    const msg = responses && responses.length > 0 ? responses : (e?.message || String(e));
+    throw new Error(`Fabric submit failed for ${fn}: ${JSON.stringify(msg)}`);
   }
   return { txId, committedAt: now };
 }
