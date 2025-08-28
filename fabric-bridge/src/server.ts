@@ -33,6 +33,10 @@ const SUBMIT_FN = process.env.SUBMIT_FN || 'SubmitArtifact';
 const UPDATE_FN = process.env.UPDATE_FN || 'UpdateArtifact';
 const SUBMIT_ARGS_MODE = (process.env.SUBMIT_ARGS_MODE as any) || 'id+data'; // 'id+data' | 'json' | 'data-only'
 const UPDATE_ARGS_MODE = (process.env.UPDATE_ARGS_MODE as any) || 'id+patch'; // 'id+patch' | 'json'
+const ENDORSING_ORGS = (process.env.ENDORSING_ORGS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
 
 // Minimal request schemas
 const artifactDataSchema = Joi.object({
@@ -90,7 +94,8 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
         submitFn: SUBMIT_FN as any,
         updateFn: UPDATE_FN as any,
         submitArgsMode: SUBMIT_ARGS_MODE as any,
-        updateArgsMode: UPDATE_ARGS_MODE as any
+        updateArgsMode: UPDATE_ARGS_MODE as any,
+        endorsingOrgs: ENDORSING_ORGS
       });
       return { txId, committedAt, peer: FABRIC_PEER };
     } finally {

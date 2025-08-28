@@ -53,6 +53,7 @@ services:
       - FABRIC_CHAINCODE=oscis
       - DISCOVERY_ENABLED=true
       - DISCOVERY_AS_LOCALHOST=false
+      - ENDORSING_ORGS=Org1MSP,Org2MSP
 
     ports:
       - "4000:4000"

@@ -138,6 +138,7 @@ export async function connectGateway(args: ConnectArgs) {
     gateway,
     network,
     contract,
+    chaincodeName: args.chaincodeName,
     close: () => gateway.disconnect()
   };
 }
@@ -147,6 +148,7 @@ type SubmitOptions = {
   updateFn?: string;
   submitArgsMode?: 'id+data' | 'json' | 'data-only';
   updateArgsMode?: 'id+patch' | 'json';
+  endorsingOrgs?: string[];
 };
 
 export async function submitTxIfReal(
@@ -183,7 +185,17 @@ export async function submitTxIfReal(
     }
   }
 
+  // Help discovery by declaring interest in this chaincode
+  try {
+    if (conn?.contract && conn?.chaincodeName && (conn as any).contract.addDiscoveryInterest) {
+      (conn as any).contract.addDiscoveryInterest({ name: conn.chaincodeName });
+    }
+  } catch {}
+
   const transaction = conn.contract.createTransaction(fn);
+  if (options?.endorsingOrgs && options.endorsingOrgs.length > 0 && (transaction as any).setEndorsingOrganizations) {
+    (transaction as any).setEndorsingOrganizations(...options.endorsingOrgs);
+  }
   const txId = transaction.getTransactionId();
   try {
     await transaction.submit(...args);
