@@ -12,14 +12,26 @@ const PORT = parseInt(process.env.PORT || '4000', 10);
 const FABRIC_CHANNEL = process.env.FABRIC_CHANNEL || 'mychannel';
 const FABRIC_CHAINCODE = process.env.FABRIC_CHAINCODE || 'artifacts';
 const FABRIC_PEER = process.env.FABRIC_PEER || 'localhost:7051';
-const WALLET_PATH = process.env.WALLET_PATH || './wallet/org1/svc-org1';
+const WALLET_PATH = process.env.WALLET_PATH || '/wallets/Org1MSP/svc-org1.id';
 const MSP_ID = process.env.MSP_ID || 'Org1MSP';
 const IDENTITY_LABEL = process.env.IDENTITY_LABEL || 'svc-org1';
 
 // Minimal request schemas
+const artifactDataSchema = Joi.object({
+  title: Joi.string().min(1).required(),
+  description: Joi.string().min(50).required(),
+  manifest: Joi.any().required(),
+  keywords: Joi.array().items(Joi.string()).optional(),
+  links: Joi.array().items(Joi.any()).optional(),
+  dois: Joi.array().items(Joi.string()).optional(),
+  fundingAgencies: Joi.array().items(Joi.any()).optional(),
+  acknowledgements: Joi.string().optional(),
+  footprint: Joi.string().pattern(/^[a-fA-F0-9]{64}$/).required()
+}).required();
+
 const submitSchema = Joi.object({
   artifactId: Joi.string().uuid().required(),
-  data: Joi.object().required(),
+  data: artifactDataSchema,
   correlationId: Joi.string().optional()
 });
 
@@ -39,6 +51,16 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
   // - getNetwork(FABRIC_CHANNEL).getContract(FABRIC_CHAINCODE)
   // - submitTransaction('SubmitArtifact', JSON.stringify(payload))
   // - For update: submitTransaction('UpdateArtifact', ...)
+
+  // Simple failure simulation for invalid payloads (defensive guard)
+  if (action === 'submit') {
+    const d = payload?.data;
+    const invalid = !d || typeof d.title !== 'string' || !d.title ||
+      typeof d.footprint !== 'string' || !/^[a-fA-F0-9]{64}$/.test(d.footprint);
+    if (invalid) {
+      throw new Error('Fabric validation failed: missing/invalid title or footprint');
+    }
+  }
 
   const txId = uuidv4().replace(/-/g, '');
   const committedAt = new Date().toISOString();

@@ -1,8 +1,9 @@
-FROM node:20-alpine AS base
+FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm i --omit=dev
+# Install ALL deps (including dev) for build stage so tsc is available
+RUN npm ci || npm i
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -13,9 +14,11 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=base /app/package.json ./
-COPY --from=base /app/node_modules ./node_modules
-COPY --from=base /app/dist ./dist
+COPY package.json package-lock.json* ./
+# Install only production deps for runtime image
+RUN npm ci --omit=dev || npm i --omit=dev
+
+COPY --from=build /app/dist ./dist
 
 EXPOSE 4000
 CMD ["node", "dist/server.js"]

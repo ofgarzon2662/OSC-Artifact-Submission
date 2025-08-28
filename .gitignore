@@ -17,3 +17,6 @@ submission_worker/.pytest_cache
 submission_worker/__pycache__
 fabric-bridge/src/wallets
 fabric-bridge/node_modules
+fabric-bridge/dist
+fabric-bridge/.env
+fabric-bridge/wallets

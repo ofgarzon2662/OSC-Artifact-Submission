@@ -33,21 +33,21 @@ RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE_CREATED = os.getenv('RABBITMQ_QUEUE_CREATED', 'artifact.created.queue')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 
-# Mock Peer Configuration
+# Fabric Bridge Configuration (replaces mock peer)
 if IS_DOCKER:
-    MOCK_PEER_URL = os.getenv('MOCK_PEER_URL', 'http://mock-peer:8080')
+    FABRIC_BRIDGE_URL = os.getenv('FABRIC_BRIDGE_URL', 'http://fabric-bridge:4000')
 else:
-    MOCK_PEER_URL = os.getenv('MOCK_PEER_URL', 'http://localhost:8080')
+    FABRIC_BRIDGE_URL = os.getenv('FABRIC_BRIDGE_URL', 'http://localhost:4000')
 
 # Log environment info
 logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
 logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
-logger.info(f"Mock Peer URL: {MOCK_PEER_URL}")
+logger.info(f"Fabric Bridge URL: {FABRIC_BRIDGE_URL}")
 logger.info(f"Listening to queue: {RABBITMQ_QUEUE_CREATED}")
 logger.info(f"Publishing to queue: {RABBITMQ_QUEUE_SUBMITTED}")
 
-# Initialize peer client
-peer_client = PeerClient(MOCK_PEER_URL)
+# Initialize fabric-bridge client
+peer_client = PeerClient(FABRIC_BRIDGE_URL)
 
 def publish_artifact_submitted(channel, artifact_id, submission_result):
     """
@@ -92,7 +92,7 @@ def publish_artifact_submitted(channel, artifact_id, submission_result):
 
 def process_artifact_submission(channel, artifact_id, artifact_data):
     """
-    Process an artifact submission by calling the mock peer.
+    Process an artifact submission by calling fabric-bridge.
     """
     logger.info(f"Processing artifact submission for ID: {artifact_id}")
     
@@ -124,13 +124,14 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
             })
             return False
  
-        # Call the mock peer to submit the artifact with the corrected payload
+        # Call fabric-bridge to submit the artifact. Map message to expected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
-            'manifest': manifest,
-            'title': title,
-            'footprint': footprint,
-            'timestamp': datetime.now(timezone.utc).isoformat()
+            'data': {
+                'manifest': manifest,
+                'title': title,
+                'footprint': footprint
+            }
         })
         
         logger.info(f"Peer submission result for artifact {artifact_id}: {submission_result}")
@@ -260,7 +261,7 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
                     "queue_created": RABBITMQ_QUEUE_CREATED,
                     "queue_submitted": RABBITMQ_QUEUE_SUBMITTED
                 },
-                "mock_peer_url": MOCK_PEER_URL
+                "fabric_bridge_url": FABRIC_BRIDGE_URL
             }
             self.wfile.write(json.dumps(health_data).encode())
         else:

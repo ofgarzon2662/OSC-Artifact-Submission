@@ -28,24 +28,32 @@ services:
       - osc-api-services-network
     restart: unless-stopped
 
-  # Mock Blockchain Peer
-  mock_peer:
+  # Fabric Bridge (TypeScript)
+  fabric-bridge:
     build:
-      context: ./mock_peer
+      context: ./fabric-bridge
       dockerfile: Dockerfile
-    container_name: osc-mock-peer
-    ports:
-      - "8080:8080"  # FastAPI server port
+    container_name: fabric-bridge
     environment:
-      - ENVIRONMENT=docker
+      - PORT=4000
+      - FABRIC_CHANNEL=${FABRIC_CHANNEL:-mychannel}
+      - FABRIC_CHAINCODE=${FABRIC_CHAINCODE:-artifacts}
+      - FABRIC_PEER=${FABRIC_PEER:-localhost:7051}
+      - WALLET_PATH=/wallets
+      - MSP_ID=${MSP_ID:-org1}
+      - IDENTITY_LABEL=${IDENTITY_LABEL:-user1}
+    ports:
+      - "4000:4000"
+    volumes:
+    - ./fabric-bridge/wallets:/wallets:ro  # host → container
     networks:
       - osc-api-services-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', (r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 20s
     restart: unless-stopped
 
   # Submission Worker
@@ -63,8 +71,8 @@ services:
       RABBITMQ_QUEUE_CREATED: ${RABBITMQ_QUEUE_CREATED}
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED}
       
-      # Mock Peer Configuration
-      MOCK_PEER_URL: ${MOCK_PEER_URL:-http://mock_peer:8080}
+      # Fabric Bridge Configuration
+      FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://fabric-bridge:4000}
       
       # Environment
       ENVIRONMENT: docker
@@ -75,7 +83,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      mock_peer:
+      fabric-bridge:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
