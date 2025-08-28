@@ -130,6 +130,12 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
             'data': {
                 'manifest': manifest,
                 'title': title,
+                'description': artifact_data.get('description'),
+                'keywords': artifact_data.get('keywords'),
+                'links': artifact_data.get('links'),
+                'dois': artifact_data.get('dois'),
+                'fundingAgencies': artifact_data.get('fundingAgencies'),
+                'acknowledgements': artifact_data.get('acknowledgements'),
                 'footprint': footprint
             }
         })

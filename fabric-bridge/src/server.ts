@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { StatusCodes } from 'http-status-codes';
 import Joi from 'joi';
 import { v4 as uuidv4 } from 'uuid';
+import { connectGateway, submitTxIfReal } from './ts/fabricClient.js';
 
 dotenv.config();
 
@@ -15,6 +16,9 @@ const FABRIC_PEER = process.env.FABRIC_PEER || 'localhost:7051';
 const WALLET_PATH = process.env.WALLET_PATH || '/wallets/Org1MSP/svc-org1.id';
 const MSP_ID = process.env.MSP_ID || 'Org1MSP';
 const IDENTITY_LABEL = process.env.IDENTITY_LABEL || 'svc-org1';
+const FABRIC_REAL_MODE = /^true$/i.test(process.env.FABRIC_REAL_MODE || 'false');
+const PEER_ENDPOINT = process.env.PEER_ENDPOINT || 'localhost:7051';
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
 
 // Minimal request schemas
 const artifactDataSchema = Joi.object({
@@ -52,7 +56,26 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
   // - submitTransaction('SubmitArtifact', JSON.stringify(payload))
   // - For update: submitTransaction('UpdateArtifact', ...)
 
-  // Simple failure simulation for invalid payloads (defensive guard)
+  // In real mode, submit to Fabric
+  if (FABRIC_REAL_MODE) {
+    const gateway = await connectGateway({
+      walletPath: WALLET_PATH,
+      identityLabel: IDENTITY_LABEL,
+      mspId: MSP_ID,
+      channelName: FABRIC_CHANNEL,
+      chaincodeName: FABRIC_CHAINCODE,
+      peerEndpoint: PEER_ENDPOINT,
+      tlsCertPath: TLS_CERT_PATH
+    });
+    try {
+      const { txId, committedAt } = await submitTxIfReal(gateway, action, payload);
+      return { txId, committedAt, peer: FABRIC_PEER };
+    } finally {
+      gateway.close();
+    }
+  }
+
+  // Simple failure simulation for invalid payloads (defensive guard in mock mode)
   if (action === 'submit') {
     const d = payload?.data;
     const invalid = !d || typeof d.title !== 'string' || !d.title ||
