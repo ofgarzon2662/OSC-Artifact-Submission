@@ -16,9 +16,10 @@ const FABRIC_PEER = process.env.FABRIC_PEER || 'localhost:7051';
 const WALLET_PATH = process.env.WALLET_PATH || '/wallets/Org1MSP/svc-org1.id';
 const MSP_ID = process.env.MSP_ID || 'Org1MSP';
 const IDENTITY_LABEL = process.env.IDENTITY_LABEL || 'svc-org1';
-const FABRIC_REAL_MODE = /^true$/i.test(process.env.FABRIC_REAL_MODE || 'false');
+const FABRIC_REAL_MODE = /^true$/i.test(process.env.FABRIC_REAL_MODE || 'true');
 const PEER_ENDPOINT = process.env.PEER_ENDPOINT || 'localhost:7051';
 const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
+const IDENTITY_FILE_PATH = process.env.IDENTITY_FILE_PATH || '';
 
 // Minimal request schemas
 const artifactDataSchema = Joi.object({
@@ -65,7 +66,8 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
       channelName: FABRIC_CHANNEL,
       chaincodeName: FABRIC_CHAINCODE,
       peerEndpoint: PEER_ENDPOINT,
-      tlsCertPath: TLS_CERT_PATH
+      tlsCertPath: TLS_CERT_PATH,
+      identityFilePath: IDENTITY_FILE_PATH
     });
     try {
       const { txId, committedAt } = await submitTxIfReal(gateway, action, payload);
@@ -100,6 +102,7 @@ app.get('/health', (_req: Request, res: Response) => {
     service: 'fabric-bridge',
     timestamp: new Date().toISOString(),
     config: {
+      realMode: FABRIC_REAL_MODE,
       channel: FABRIC_CHANNEL,
       chaincode: FABRIC_CHAINCODE,
       peer: FABRIC_PEER,

@@ -40,8 +40,9 @@ services:
       - FABRIC_CHAINCODE=${FABRIC_CHAINCODE:-artifacts}
       - FABRIC_PEER=${FABRIC_PEER:-localhost:7051}
       - WALLET_PATH=/wallets
-      - MSP_ID=${MSP_ID:-org1}
-      - IDENTITY_LABEL=${IDENTITY_LABEL:-user1}
+      - MSP_ID=${MSP_ID:-Org1MSP}
+      - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
+      - IDENTITY_FILE_PATH=/wallets/Org1MSP/svc-org1.id
     ports:
       - "4000:4000"
     volumes:
