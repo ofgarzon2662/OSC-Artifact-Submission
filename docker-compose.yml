@@ -44,19 +44,21 @@ services:
       - MSP_ID=${MSP_ID:-Org1MSP}
       - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
       - IDENTITY_FILE_PATH=/wallets/Org1MSP/svc-org1.id
-      - TLS_CERT_PATH=/tls/peer0-org1-ca-crt
+      - TLS_CERT_PATH=/tls/peers-bundle.crt
       - UPDATE_ARGS_MODE=id+patch  
       - SUBMIT_FN=CreateArtifact
       - SUBMIT_ARGS_MODE=data-only 
       - PEER_ENDPOINT=peer0.org1.example.com:7051
       - FABRIC_CHANNEL=mychannel
       - FABRIC_CHAINCODE=oscis
-      - DISCOVERY_ENABLED=false
+      - DISCOVERY_ENABLED=true
+      - DISCOVERY_AS_LOCALHOST=false
+
     ports:
       - "4000:4000"
     volumes:
     - ./fabric-bridge/wallets:/wallets:ro
-    - ./fabric-bridge/peer0-org1-ca-crt:/tls/peer0-org1-ca-crt:ro
+    - ./fabric-bridge/peers-bundle.crt:/tls/peers-bundle.crt:ro
     networks:
       - osc-api-services-network
       - fabric-network

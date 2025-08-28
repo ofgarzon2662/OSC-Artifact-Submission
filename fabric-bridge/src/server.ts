@@ -24,6 +24,10 @@ const TLS_OVERRIDE_HOSTNAME = process.env.TLS_OVERRIDE_HOSTNAME || '';
 const DISCOVERY_ENABLED = /^true$/i.test(process.env.DISCOVERY_ENABLED || 'true');
 const DISCOVERY_AS_LOCALHOST = /^true$/i.test(process.env.DISCOVERY_AS_LOCALHOST || 'false');
 
+// Optional defaults for submitter identity fields injected into payload if missing
+const SUBMITTER_EMAIL_DEFAULT = process.env.SUBMITTER_EMAIL_DEFAULT || 'svc@org1.example.com';
+const SUBMITTER_USERNAME_DEFAULT = process.env.SUBMITTER_USERNAME_DEFAULT || 'svc-org1';
+
 // Chaincode call configuration
 const SUBMIT_FN = process.env.SUBMIT_FN || 'SubmitArtifact';
 const UPDATE_FN = process.env.UPDATE_FN || 'UpdateArtifact';
@@ -137,7 +141,15 @@ app.post('/submit', async (req: Request, res: Response) => {
   }
   const correlationId = value.correlationId || uuidv4();
   try {
-    const result = await submitToFabric('submit', { artifactId: value.artifactId, data: value.data, correlationId });
+    // Inject submitter fields if not present
+    const data = { ...value.data };
+    if (SUBMITTER_EMAIL_DEFAULT && data.submitterEmail == null) {
+      (data as any).submitterEmail = SUBMITTER_EMAIL_DEFAULT;
+    }
+    if (SUBMITTER_USERNAME_DEFAULT && data.submitterUsername == null) {
+      (data as any).submitterUsername = SUBMITTER_USERNAME_DEFAULT;
+    }
+    const result = await submitToFabric('submit', { artifactId: value.artifactId, data, correlationId });
     return res.status(StatusCodes.OK).json({ success: true, correlationId, ...result });
   } catch (e: any) {
     return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ success: false, correlationId, error: String(e?.message || e) });
