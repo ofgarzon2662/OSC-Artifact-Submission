@@ -127,20 +127,30 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
             })
             return False
  
+        # Sanitize optional array fields
+        cleaned_dois = None
+        if isinstance(artifact_data.get('dois'), list):
+            cleaned_dois = [d for d in artifact_data.get('dois', []) if isinstance(d, str) and d.strip()]
+
+        # Build payload for fabric-bridge
+        data_payload = {
+            'manifest': manifest,
+            'title': title,
+            'description': artifact_data.get('description'),
+            'keywords': artifact_data.get('keywords'),
+            'links': artifact_data.get('links'),
+            # 'dois' will be added only if non-empty list
+            'fundingAgencies': artifact_data.get('fundingAgencies'),
+            'acknowledgements': artifact_data.get('acknowledgements'),
+            'footprint': footprint
+        }
+        if cleaned_dois:
+            data_payload['dois'] = cleaned_dois
+
         # Call fabric-bridge to submit the artifact. Map message to expected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
-            'data': {
-                'manifest': manifest,
-                'title': title,
-                'description': artifact_data.get('description'),
-                'keywords': artifact_data.get('keywords'),
-                'links': artifact_data.get('links'),
-                'dois': artifact_data.get('dois'),
-                'fundingAgencies': artifact_data.get('fundingAgencies'),
-                'acknowledgements': artifact_data.get('acknowledgements'),
-                'footprint': footprint
-            }
+            'data': data_payload
         })
         
         logger.info(f"Peer submission result for artifact {artifact_id}: {submission_result}")
