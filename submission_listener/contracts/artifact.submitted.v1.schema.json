@@ -32,24 +32,12 @@
         "type": "string",
         "format": "date-time"
       },
-      "peerId": {
-        "type": "string",
-        "maxLength": 64
-      },
       "version": {
         "type": "string",
         "const": "v1"
       }
     },
     "allOf": [
-      {
-        "if": {
-          "properties": { "submissionState": { "const": "SUCCESS" } }
-        },
-        "then": {
-          "required": ["blockchainTxId"]
-        }
-      },
       {
         "if": {
           "properties": { "submissionState": { "const": "FAILED" } }

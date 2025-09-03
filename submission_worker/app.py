@@ -30,7 +30,7 @@ RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localho
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
-RABBITMQ_QUEUE_CREATED = os.getenv('RABBITMQ_QUEUE_CREATED', 'artifact.created.queue')
+RABBITMQ_QUEUE_SUBMIT = os.getenv('RABBITMQ_QUEUE_SUBMIT') or os.getenv('RABBITMQ_QUEUE_CREATED', 'artifact.submit.queue')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 
 # Fabric Bridge Configuration (replaces mock peer)
@@ -43,7 +43,7 @@ else:
 logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
 logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
 logger.info(f"Fabric Bridge URL: {FABRIC_BRIDGE_URL}")
-logger.info(f"Listening to queue: {RABBITMQ_QUEUE_CREATED}")
+logger.info(f"Listening to queue: {RABBITMQ_QUEUE_SUBMIT}")
 logger.info(f"Publishing to queue: {RABBITMQ_QUEUE_SUBMITTED}")
 
 # Initialize fabric-bridge client
@@ -62,12 +62,15 @@ def publish_artifact_submitted(channel, artifact_id, submission_result):
         }
         
         # Add blockchain transaction ID if successful
-        if submission_result.get('success') and submission_result.get('txId'):
-            message['blockchainTxId'] = submission_result['txId']
+        tx_id = (
+            submission_result.get('txId')
+            or submission_result.get('transactionId')
+            or submission_result.get('txID')
+        )
+        if submission_result.get('success') and tx_id:
+            message['blockchainTxId'] = tx_id
         
-        # Add peer ID if available
-        if submission_result.get('peerId'):
-            message['peerId'] = submission_result['peerId']
+        # Do not include peerId; it's not required
         
         # Add error if failed
         if not submission_result.get('success') and submission_result.get('error'):
@@ -160,8 +163,8 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         return False
 
 def callback(ch, method, properties, body):
-    """Handle incoming artifact.created messages from the RabbitMQ queue."""
-    logger.info(f"Received artifact.created message: {body.decode()}")
+    """Handle incoming artifact.submit messages from the RabbitMQ queue."""
+    logger.info(f"Received artifact.submit message: {body.decode()}")
     
     try:
         message = json.loads(body)
@@ -178,11 +181,11 @@ def callback(ch, method, properties, body):
         
         if success:
             # Acknowledge the message
-            logger.info(f"Successfully processed artifact.created message for artifact {artifact_id}")
+            logger.info(f"Successfully processed artifact.submit message for artifact {artifact_id}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
             # Don't requeue - we already published a failure event
-            logger.error(f"Failed to process artifact.created message for artifact {artifact_id}, rejecting (not requeuing)")
+            logger.error(f"Failed to process artifact.submit message for artifact {artifact_id}, rejecting (not requeuing)")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             
     except json.JSONDecodeError as e:
@@ -196,7 +199,7 @@ def callback(ch, method, properties, body):
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 def start_rabbitmq_consumer():
-    """Connect to RabbitMQ and start consuming artifact.created messages."""
+    """Connect to RabbitMQ and start consuming artifact.submit messages."""
     connection = None
     retry_count = 0
     max_retries = 30  # 2.5 minutes of retries
@@ -227,14 +230,14 @@ def start_rabbitmq_consumer():
     channel = connection.channel()
     
     # Ensure both queues exist
-    channel.queue_declare(queue=RABBITMQ_QUEUE_CREATED, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMIT, durable=True)
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue=RABBITMQ_QUEUE_CREATED, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMIT, on_message_callback=callback)
     
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_CREATED}")
+    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMIT}")
     logger.info(f"Ready to process artifact submissions...")
     
     try:
@@ -264,7 +267,7 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
                 "rabbitmq": {
                     "host": RABBITMQ_HOST,
                     "port": RABBITMQ_PORT,
-                    "queue_created": RABBITMQ_QUEUE_CREATED,
+                    "queue_submit": RABBITMQ_QUEUE_SUBMIT,
                     "queue_submitted": RABBITMQ_QUEUE_SUBMITTED
                 },
                 "fabric_bridge_url": FABRIC_BRIDGE_URL

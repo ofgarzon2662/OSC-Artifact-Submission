@@ -57,8 +57,8 @@ services:
     ports:
       - "4000:4000"
     volumes:
-    - /home/ofgarzon/Projects/GithubProjects/OSC-Network/wallets:/wallets:ro
-    - /home/ofgarzon/Projects/GithubProjects/OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
+    - ../OSC-Network/wallets:/wallets:ro
+    - ../OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
     networks:
       - osc-api-services-network
       - fabric-network
@@ -82,8 +82,8 @@ services:
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASS: ${RABBITMQ_PASS}
-      RABBITMQ_QUEUE_CREATED: ${RABBITMQ_QUEUE_CREATED}
-      RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED}
+      RABBITMQ_QUEUE_SUBMIT: ${RABBITMQ_QUEUE_SUBMIT:-artifact.submit.queue}
+      RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED:-artifact.submitted.queue}
       
       # Fabric Bridge Configuration
       FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://fabric-bridge:4000}

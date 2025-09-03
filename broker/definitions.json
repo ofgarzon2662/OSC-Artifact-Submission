@@ -19,7 +19,7 @@
       "arguments": {}
     },
     {
-      "name": "artifact.created.queue",
+      "name": "artifact.submit.queue",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
@@ -38,9 +38,9 @@
     {
       "source": "artifact.exchange",
       "vhost": "/",
-      "destination": "artifact.created.queue",
+      "destination": "artifact.submit.queue",
       "destination_type": "queue",
-      "routing_key": "artifact.created",
+      "routing_key": "artifact.submit",
       "arguments": {}
     }
   ]
