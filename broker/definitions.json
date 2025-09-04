@@ -24,6 +24,20 @@
       "durable": true,
       "auto_delete": false,
       "arguments": {}
+    },
+    {
+      "name": "artifact.update.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "artifact.updated.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
     }
   ],
   "bindings": [
@@ -41,6 +55,22 @@
       "destination": "artifact.submit.queue",
       "destination_type": "queue",
       "routing_key": "artifact.submit",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "artifact.update.queue",
+      "destination_type": "queue",
+      "routing_key": "artifact.update",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "artifact.updated.queue",
+      "destination_type": "queue",
+      "routing_key": "artifact.updated",
       "arguments": {}
     }
   ]

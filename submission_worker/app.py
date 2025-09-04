@@ -32,6 +32,8 @@ RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE_SUBMIT = os.getenv('RABBITMQ_QUEUE_SUBMIT') or os.getenv('RABBITMQ_QUEUE_CREATED', 'artifact.submit.queue')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
+RABBITMQ_QUEUE_UPDATE = os.getenv('RABBITMQ_QUEUE_UPDATE', 'artifact.update.queue')
+RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
 # Fabric Bridge Configuration (replaces mock peer)
 if IS_DOCKER:
@@ -45,6 +47,7 @@ logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
 logger.info(f"Fabric Bridge URL: {FABRIC_BRIDGE_URL}")
 logger.info(f"Listening to queue: {RABBITMQ_QUEUE_SUBMIT}")
 logger.info(f"Publishing to queue: {RABBITMQ_QUEUE_SUBMITTED}")
+logger.info(f"Listening for updates on: {RABBITMQ_QUEUE_UPDATE}")
 
 # Initialize fabric-bridge client
 peer_client = PeerClient(FABRIC_BRIDGE_URL)
@@ -91,6 +94,41 @@ def publish_artifact_submitted(channel, artifact_id, submission_result):
         
     except Exception as e:
         logger.error(f"Failed to publish artifact.submitted event for artifact {artifact_id}: {str(e)}")
+        raise
+
+def publish_artifact_updated(channel, artifact_id, update_result):
+    """
+    Publish an artifact.updated event to the message queue.
+    """
+    try:
+        message = {
+            'artifactId': artifact_id,
+            'submissionState': 'SUCCESS' if update_result.get('success') else 'FAILED',
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+            'version': 'v1'
+        }
+        tx_id = (
+            update_result.get('txId')
+            or update_result.get('transactionId')
+            or update_result.get('txID')
+        )
+        if update_result.get('success') and tx_id:
+            message['blockchainTxId'] = tx_id
+        if not update_result.get('success') and update_result.get('error'):
+            message['error'] = update_result['error']
+
+        channel.basic_publish(
+            exchange='',
+            routing_key=RABBITMQ_QUEUE_UPDATED,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(
+                delivery_mode=2,
+                content_type='application/json'
+            )
+        )
+        logger.info(f"Published artifact.updated event for artifact {artifact_id} with state {message['submissionState']}")
+    except Exception as e:
+        logger.error(f"Failed to publish artifact.updated event for artifact {artifact_id}: {str(e)}")
         raise
 
 def process_artifact_submission(channel, artifact_id, artifact_data):
@@ -172,9 +210,41 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         
         return False
 
+def process_artifact_update(channel, artifact_id, patch_data):
+    """
+    Process an artifact update by calling fabric-bridge /update.
+    """
+    logger.info(f"Processing artifact update for ID: {artifact_id}")
+    try:
+        # Support both shapes: {artifactId, patch:{...}} and flat {artifactId, ...fields}
+        effective_patch = None
+        if isinstance(patch_data, dict) and isinstance(patch_data.get('patch'), dict):
+            effective_patch = patch_data.get('patch')
+        elif isinstance(patch_data, dict):
+            # Shallow copy without artifactId
+            effective_patch = {k: v for k, v in patch_data.items() if k != 'artifactId'}
+        else:
+            effective_patch = {}
+
+        fp = effective_patch.get('footprint')
+        if fp is not None and not (isinstance(fp, str) and len(fp) == 64 and all(c in '0123456789abcdefABCDEF' for c in fp)):
+            error_msg = f"Invalid 'footprint' in update for artifact {artifact_id}"
+            logger.error(error_msg)
+            publish_artifact_updated(channel, artifact_id, { 'success': False, 'error': error_msg })
+            return False
+
+        update_result = peer_client.update_artifact(artifact_id, effective_patch)
+        logger.info(f"Peer update result for artifact {artifact_id}: {update_result}")
+        publish_artifact_updated(channel, artifact_id, update_result)
+        return True
+    except Exception as e:
+        logger.error(f"Error processing update for artifact {artifact_id}: {str(e)}")
+        publish_artifact_updated(channel, artifact_id, { 'success': False, 'error': f"Update processing failed: {str(e)}" })
+        return False
+
 def callback(ch, method, properties, body):
     """Handle incoming artifact.submit messages from the RabbitMQ queue."""
-    logger.info(f"Received artifact.submit message: {body.decode()}")
+    logger.info(f"Received message on {getattr(method, 'routing_key', '')}: {body.decode()}")
     
     try:
         message = json.loads(body)
@@ -186,8 +256,11 @@ def callback(ch, method, properties, body):
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
         
-        # Process the artifact submission
-        success = process_artifact_submission(ch, artifact_id, message)
+        rk = getattr(method, 'routing_key', '') or ''
+        if rk == 'artifact.update' or rk.endswith('artifact.update.queue'):
+            success = process_artifact_update(ch, artifact_id, message)
+        else:
+            success = process_artifact_submission(ch, artifact_id, message)
         
         if success:
             # Acknowledge the message
@@ -209,7 +282,7 @@ def callback(ch, method, properties, body):
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 def start_rabbitmq_consumer():
-    """Connect to RabbitMQ and start consuming artifact.submit messages."""
+    """Connect to RabbitMQ and start consuming artifact.submit and artifact.update messages."""
     connection = None
     retry_count = 0
     max_retries = 30  # 2.5 minutes of retries
@@ -239,16 +312,19 @@ def start_rabbitmq_consumer():
 
     channel = connection.channel()
     
-    # Ensure both queues exist
+    # Ensure queues exist
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMIT, durable=True)
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATE, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATED, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMIT, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_UPDATE, on_message_callback=callback)
     
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMIT}")
-    logger.info(f"Ready to process artifact submissions...")
+    logger.info(f"Started consuming from queues: {RABBITMQ_QUEUE_SUBMIT}, {RABBITMQ_QUEUE_UPDATE}")
+    logger.info(f"Ready to process artifact submissions and updates...")
     
     try:
         channel.start_consuming()

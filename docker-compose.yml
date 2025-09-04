@@ -48,6 +48,7 @@ services:
       - TLS_OVERRIDE_HOSTNAME=peer0.org1.example.com
       - UPDATE_ARGS_MODE=id+patch  
       - SUBMIT_FN=CreateArtifact
+      - UPDATE_FN=UpdateArtifactDetails
       - SUBMIT_ARGS_MODE=data-only 
       - PEER_ENDPOINT=peer0.org1.example.com:7051
       - FABRIC_CHANNEL=mychannel
