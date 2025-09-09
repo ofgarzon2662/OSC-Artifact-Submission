@@ -149,4 +149,22 @@ export async function submitTxIfReal(
   }
 }
 
+export async function evaluateHistory(
+  conn: any,
+  fnName: string,
+  artifactId: string
+) {
+  try {
+    // For evaluate, do not endorse; evaluate directly from proposal
+    const proposal = (conn.contract as any).newProposal(fnName, { arguments: [artifactId] });
+    const result = await (proposal as any).evaluate();
+    // result is a Uint8Array/Buffer containing JSON
+    const json = Buffer.from(result).toString('utf8');
+    return json;
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    throw new Error(`Fabric evaluate failed for ${fnName}: ${msg}`);
+  }
+}
+
 

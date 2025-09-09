@@ -144,3 +144,29 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped 
+
+  # Get History Worker (FastAPI)
+  get_history_worker:
+    build:
+      context: ./get_history_worker
+      dockerfile: Dockerfile
+    container_name: osc-get-history-worker
+    environment:
+      BRIDGE_URL: ${BRIDGE_URL}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
+      CACHE_MAX_ARTIFACTS: ${CACHE_MAX_ARTIFACTS:-100}
+      MAX_PAGE_SIZE: ${MAX_PAGE_SIZE:-500}
+    ports:
+      - "8002:8002"
+    networks:
+      - osc-api-services-network
+    depends_on:
+      fabric-bridge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped

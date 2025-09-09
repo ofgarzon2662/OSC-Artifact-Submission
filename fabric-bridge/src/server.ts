@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { StatusCodes } from 'http-status-codes';
 import Joi from 'joi';
 import { v4 as uuidv4 } from 'uuid';
-import { connectGateway, submitTxIfReal } from './ts/fabricClient.js';
+import { connectGateway, submitTxIfReal, evaluateHistory } from './ts/fabricClient.js';
 
 dotenv.config();
 
@@ -31,6 +31,7 @@ const SUBMITTER_USERNAME_DEFAULT = process.env.SUBMITTER_USERNAME_DEFAULT || 'sv
 // Chaincode call configuration
 const SUBMIT_FN = process.env.SUBMIT_FN || 'SubmitArtifact';
 const UPDATE_FN = process.env.UPDATE_FN || 'UpdateArtifact';
+const HISTORY_FN = process.env.HISTORY_FN || 'GetArtifactHistory';
 const SUBMIT_ARGS_MODE = (process.env.SUBMIT_ARGS_MODE as any) || 'id+data'; // 'id+data' | 'json' | 'data-only'
 const UPDATE_ARGS_MODE = (process.env.UPDATE_ARGS_MODE as any) || 'id+patch'; // 'id+patch' | 'json'
 const ENDORSING_ORGS = (process.env.ENDORSING_ORGS || '')
@@ -172,6 +173,39 @@ app.post('/update', async (req: Request, res: Response) => {
     return res.status(StatusCodes.OK).json({ success: true, correlationId, ...result });
   } catch (e: any) {
     return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ success: false, correlationId, error: String(e?.message || e) });
+  }
+});
+
+app.get('/history/:artifactId', async (req: Request, res: Response) => {
+  const artifactId = req.params.artifactId;
+  // Basic UUID v4 format check; chaincode enforces canonical lowercase UUID
+  const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+  if (!uuidRegex.test(artifactId)) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Invalid artifactId format (UUID expected)' });
+  }
+  try {
+    const gateway = await connectGateway({
+      walletPath: WALLET_PATH,
+      identityLabel: IDENTITY_LABEL,
+      mspId: MSP_ID,
+      channelName: FABRIC_CHANNEL,
+      chaincodeName: FABRIC_CHAINCODE,
+      peerEndpoint: PEER_ENDPOINT,
+      tlsCertPath: TLS_CERT_PATH,
+      identityFilePath: IDENTITY_FILE_PATH,
+      sslOverride: TLS_OVERRIDE_HOSTNAME,
+      discoveryEnabled: DISCOVERY_ENABLED,
+      discoveryAsLocalhost: DISCOVERY_AS_LOCALHOST
+    });
+    try {
+      const json = await evaluateHistory(gateway, HISTORY_FN, artifactId.toLowerCase());
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(StatusCodes.OK).send(json);
+    } finally {
+      gateway.close();
+    }
+  } catch (e: any) {
+    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ success: false, error: String(e?.message || e) });
   }
 });
 
