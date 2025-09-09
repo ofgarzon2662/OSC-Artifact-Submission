@@ -40,7 +40,10 @@ def _validate_uuid_lower(uuid_str: str) -> str:
 
 async def fetch_history_from_bridge(artifact_id: str) -> List[Dict[str, Any]]:
     url = f"{BRIDGE_URL}/history/{artifact_id}"
-    timeout = httpx.Timeout(10.0, read=20.0)
+    # Increase read timeout for large histories; make configurable via env
+    read_timeout = float(os.getenv("GHW_BRIDGE_READ_TIMEOUT", "60"))
+    connect_timeout = float(os.getenv("GHW_BRIDGE_CONNECT_TIMEOUT", "10"))
+    timeout = httpx.Timeout(connect_timeout, read=read_timeout)
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.get(url)
         if r.status_code != 200:

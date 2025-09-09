@@ -61,6 +61,23 @@ export async function connectGateway(args: ConnectArgs) {
     channelOptions['grpc.ssl_target_name_override'] = args.sslOverride;
     channelOptions['grpc.default_authority'] = args.sslOverride;
   }
+  // Increase gRPC message size limits for large history payloads
+  try {
+    const maxRecv = parseInt(process.env.GRPC_MAX_RECV_BYTES || '', 10);
+    const maxSend = parseInt(process.env.GRPC_MAX_SEND_BYTES || '', 10);
+    if (!Number.isNaN(maxRecv) && maxRecv > 0) {
+      channelOptions['grpc.max_receive_message_length'] = maxRecv;
+    } else {
+      // Default to 64 MiB if not provided
+      channelOptions['grpc.max_receive_message_length'] = 64 * 1024 * 1024;
+    }
+    if (!Number.isNaN(maxSend) && maxSend > 0) {
+      channelOptions['grpc.max_send_message_length'] = maxSend;
+    } else {
+      // Default to 16 MiB if not provided
+      channelOptions['grpc.max_send_message_length'] = 16 * 1024 * 1024;
+    }
+  } catch {}
   const client = new (grpc as any).Client(args.peerEndpoint, creds, channelOptions);
 
   // Gateway identity and signer
@@ -72,10 +89,19 @@ export async function connectGateway(args: ConnectArgs) {
     client: client as any,
     identity,
     signer,
-    evaluateOptions: () => ({ deadline: Date.now() + 5000 }),
-    endorseOptions: () => ({ deadline: Date.now() + 15000 }),
-    submitOptions: () => ({ deadline: Date.now() + 5000 }),
-    commitStatusOptions: () => ({ deadline: Date.now() + 60000 })
+    // Make deadlines configurable via env; increase evaluate for large histories
+    evaluateOptions: () => ({
+      deadline: Date.now() + parseInt(process.env.EVALUATE_DEADLINE_MS || '60000', 10)
+    }),
+    endorseOptions: () => ({
+      deadline: Date.now() + parseInt(process.env.ENDORSE_DEADLINE_MS || '15000', 10)
+    }),
+    submitOptions: () => ({
+      deadline: Date.now() + parseInt(process.env.SUBMIT_DEADLINE_MS || '5000', 10)
+    }),
+    commitStatusOptions: () => ({
+      deadline: Date.now() + parseInt(process.env.COMMIT_STATUS_DEADLINE_MS || '60000', 10)
+    })
   });
 
   const network: Network = gateway.getNetwork(args.channelName) as any;
