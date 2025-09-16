@@ -48,7 +48,7 @@ const artifactDataSchema = Joi.object({
   links: Joi.array().items(Joi.any()).optional(),
   dois: Joi.array().items(Joi.string()).optional(),
   fundingAgencies: Joi.array().items(Joi.any()).optional(),
-  acknowledgements: Joi.string().optional(),
+  acknowledgements: Joi.string().allow('').optional(),
   footprint: Joi.string().pattern(/^[a-fA-F0-9]{64}$/).required()
 }).required();
 
