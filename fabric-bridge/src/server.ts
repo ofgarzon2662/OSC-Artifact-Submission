@@ -119,7 +119,7 @@ async function submitToFabric(action: 'submit'|'update', payload: any) {
   return { txId, committedAt, peer: FABRIC_PEER };
 }
 
-const app = express();
+export const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
@@ -209,9 +209,11 @@ app.get('/history/:artifactId', async (req: Request, res: Response) => {
   }
 });
 
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`fabric-bridge listening on http://0.0.0.0:${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`fabric-bridge listening on http://0.0.0.0:${PORT}`);
+  });
+}
 
 
