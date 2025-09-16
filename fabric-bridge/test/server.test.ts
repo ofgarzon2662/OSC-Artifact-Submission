@@ -62,6 +62,26 @@ describe('fabric-bridge endpoints', () => {
   it('GET /history with bad UUID returns 400', async () => {
     await request(app).get('/history/not-a-uuid').expect(400);
   });
+
+  it('POST /submit injects submitter defaults when missing', async () => {
+    delete process.env.SUBMITTER_EMAIL_DEFAULT;
+    delete process.env.SUBMITTER_USERNAME_DEFAULT;
+    process.env.SUBMITTER_EMAIL_DEFAULT = 'svc@org1.example.com';
+    process.env.SUBMITTER_USERNAME_DEFAULT = 'svc-org1';
+    const res = await request(app)
+      .post('/submit')
+      .send({
+        artifactId: '00000000-0000-4000-8000-000000000004',
+        data: {
+          title: 't',
+          description: 'x'.repeat(60),
+          manifest: [],
+          footprint: 'a'.repeat(64)
+        }
+      })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+  });
 });
 
 
