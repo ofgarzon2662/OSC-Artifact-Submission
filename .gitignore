@@ -15,3 +15,11 @@ submission_worker/.coverage
 submission_worker/htmlcov
 submission_worker/.pytest_cache
 submission_worker/__pycache__
+fabric-bridge/src/wallets
+fabric-bridge/node_modules
+fabric-bridge/dist
+fabric-bridge/.env
+fabric-bridge/wallets
+fabric-bridge/peer0-org1-ca-crt
+fabric-bridge/peer0-org2-ca-crt
+fabric-bridge/peers-bundle.crt

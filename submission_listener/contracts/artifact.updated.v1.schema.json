@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "artifact.updated.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifactId",
+    "submissionState",
+    "updatedAt",
+    "version"
+  ],
+  "properties": {
+    "artifactId": { "type": "string", "format": "uuid" },
+    "submissionState": { "type": "string", "enum": ["FAILED", "SUCCESS"] },
+    "blockchainTxId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "error": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "version": { "type": "string", "const": "v1" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "submissionState": { "const": "FAILED" } } },
+      "then": { "required": ["error"] }
+    }
+  ]
+}

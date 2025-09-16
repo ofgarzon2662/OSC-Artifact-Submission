@@ -19,7 +19,21 @@
       "arguments": {}
     },
     {
-      "name": "artifact.created.queue",
+      "name": "artifact.submit.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "artifact.update.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "artifact.updated.queue",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
@@ -38,9 +52,25 @@
     {
       "source": "artifact.exchange",
       "vhost": "/",
-      "destination": "artifact.created.queue",
+      "destination": "artifact.submit.queue",
       "destination_type": "queue",
-      "routing_key": "artifact.created",
+      "routing_key": "artifact.submit",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "artifact.update.queue",
+      "destination_type": "queue",
+      "routing_key": "artifact.update",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "artifact.updated.queue",
+      "destination_type": "queue",
+      "routing_key": "artifact.updated",
       "arguments": {}
     }
   ]

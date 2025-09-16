@@ -11,6 +11,7 @@ RUN mkdir -p /app/schema
 
 # Copy the schema file (now from local contracts folder)
 COPY contracts/artifact.submitted.v1.schema.json /app/schema/
+COPY contracts/artifact.updated.v1.schema.json /app/schema/
 
 # Copy application code
 COPY app.py .

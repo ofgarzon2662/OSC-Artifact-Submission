@@ -1,0 +1,17 @@
+# Dependencies and build output
+node_modules
+/dist
+
+# OS/editor junk
+.DS_Store
+npm-debug.log*
+yarn-error.log*
+
+# Env/config
+.env
+
+# Wallets should be mounted at runtime, not baked into image
+wallet
+wallets
+src/wallet
+src/wallets

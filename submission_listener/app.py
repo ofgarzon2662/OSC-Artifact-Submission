@@ -31,6 +31,7 @@ RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
+RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
 # API Gateway URL with environment-aware defaults
 if IS_DOCKER:
@@ -72,6 +73,17 @@ def load_schema():
 # Load the schema
 artifact_submitted_schema = load_schema()
 
+# Load the updated schema
+if IS_DOCKER:
+    updated_schema_path = '/app/schema/artifact.updated.v1.schema.json'
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    updated_schema_path = os.path.join(current_dir, 'contracts', 'artifact.updated.v1.schema.json')
+if not os.path.exists(updated_schema_path):
+    raise FileNotFoundError(f"Schema file not found at: {updated_schema_path}")
+with open(updated_schema_path, 'r') as f:
+    artifact_updated_schema = json.load(f)
+
 def update_artifact_status(artifact_id, submission_data):
     """
     Send a PATCH request to the API Gateway to update an artifact's status.
@@ -81,17 +93,20 @@ def update_artifact_status(artifact_id, submission_data):
     
     # Prepare data for PATCH request based on the artifact.submitted message
     patch_data = {
-        'submissionState': submission_data['submissionState'],
-        'submittedAt': submission_data['submittedAt']
+        'submissionState': submission_data['submissionState']
     }
     
-    # Include blockchainTxId if present (should be there if submissionState is SUCCESS)
+    # Include blockchainTxId if present
     if 'blockchainTxId' in submission_data:
         patch_data['blockchainTxId'] = submission_data['blockchainTxId']
     
     # Add peerId if present
     if 'peerId' in submission_data:
         patch_data['peerId'] = submission_data['peerId']
+
+    # Include updatedAt only if present (e.g., for update events)
+    if 'updatedAt' in submission_data:
+        patch_data['updatedAt'] = submission_data['updatedAt']
 
     # If the submission failed, include the error message
     if submission_data['submissionState'] == 'FAILED' and 'error' in submission_data:
@@ -124,10 +139,10 @@ def update_artifact_status(artifact_id, submission_data):
         logger.error(f"Request error updating artifact {artifact_id}: {str(e)}")
         return False
 
-def validate_message(message):
-    """Validate message against the JSON schema."""
+def validate_message(message, schema):
+    """Validate message against the provided JSON schema."""
     try:
-        jsonschema.validate(instance=message, schema=artifact_submitted_schema)
+        jsonschema.validate(instance=message, schema=schema)
         logger.debug("Message validation passed")
         return True
     except jsonschema.exceptions.ValidationError as e:
@@ -140,9 +155,16 @@ def callback(ch, method, properties, body):
     
     try:
         message = json.loads(body)
+        routing_key = getattr(method, 'routing_key', '') or ''
+        
+        # Choose schema based on queue/topic
+        if routing_key == 'artifact.updated' or routing_key.endswith('artifact.updated.queue'):
+            schema = artifact_updated_schema
+        else:
+            schema = artifact_submitted_schema
         
         # Validate message against schema
-        if not validate_message(message):
+        if not validate_message(message, schema):
             logger.error("Message validation failed, rejecting message")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
@@ -205,12 +227,15 @@ def start_rabbitmq_consumer():
     
     # Ensure queue exists (in case it wasn't created by definitions.json)
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATED, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMITTED, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_UPDATED, on_message_callback=callback)
     
     logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMITTED}")
+    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_UPDATED}")
     logger.info(f"Using API Gateway URL: {API_GATEWAY_URL}")
     logger.info(f"Service role: {SUBMISSION_LISTENER_SERVICE_ROLE}")
     
