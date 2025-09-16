@@ -82,6 +82,45 @@ describe('fabric-bridge endpoints', () => {
       .expect(200);
     expect(res.body.success).toBe(true);
   });
+
+  it('GET /history/:id returns 200 with mocked gateway', async () => {
+    // Re-import server with mocked fabric client
+    jest.resetModules();
+    jest.doMock('../src/ts/fabricClient.ts', () => ({
+      connectGateway: jest.fn().mockResolvedValue({ close: jest.fn() }),
+      evaluateHistory: jest.fn().mockResolvedValue('[]'),
+      submitTxIfReal: jest.fn()
+    }));
+    const mod = await import('../src/server');
+    const appMocked = (mod as any).app;
+    await request(appMocked)
+      .get('/history/00000000-0000-4000-8000-000000000005')
+      .expect(200);
+  });
+
+  it('POST /submit returns 500 when Fabric submission fails', async () => {
+    jest.resetModules();
+    jest.doMock('../src/ts/fabricClient.ts', () => ({
+      connectGateway: jest.fn(),
+      evaluateHistory: jest.fn(),
+      submitTxIfReal: jest.fn().mockRejectedValue(new Error('boom'))
+    }));
+    process.env.FABRIC_REAL_MODE = 'true';
+    const mod = await import('../src/server');
+    const appMocked = (mod as any).app;
+    await request(appMocked)
+      .post('/submit')
+      .send({
+        artifactId: '00000000-0000-4000-8000-000000000006',
+        data: {
+          title: 't',
+          description: 'x'.repeat(60),
+          manifest: [],
+          footprint: 'b'.repeat(64)
+        }
+      })
+      .expect(500);
+  });
 });
 
 
