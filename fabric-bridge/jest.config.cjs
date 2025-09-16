@@ -12,6 +12,10 @@ module.exports = {
   verbose: true,
   collectCoverage: true,
   collectCoverageFrom: ['src/**/*.ts'],
+  moduleNameMapper: {
+    // Map ESM .js import to TS source for ts-jest
+    '^\.\/ts\/fabricClient\\.js$': '<rootDir>/src/ts/fabricClient.ts'
+  },
   coverageThreshold: {
     global: {
       statements: 80,
