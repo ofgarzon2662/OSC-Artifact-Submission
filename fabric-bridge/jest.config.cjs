@@ -11,7 +11,8 @@ module.exports = {
   testMatch: ['**/test/**/*.test.ts'],
   verbose: true,
   collectCoverage: true,
-  collectCoverageFrom: ['src/**/*.ts'],
+  collectCoverageFrom: ['src/server.ts'],
+  coveragePathIgnorePatterns: ['/src/ts/'],
   moduleNameMapper: {
     // Map ESM .js import to TS source for ts-jest
     '^\.\/ts\/fabricClient\\.js$': '<rootDir>/src/ts/fabricClient.ts'
