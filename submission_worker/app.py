@@ -73,7 +73,9 @@ def publish_artifact_submitted(channel, artifact_id, submission_result):
         if submission_result.get('success') and tx_id:
             message['blockchainTxId'] = tx_id
         
-        # Do not include peerId; it's not required
+        # Include peerId if provided by bridge
+        if submission_result.get('peerId'):
+            message['peerId'] = submission_result['peerId']
         
         # Add error if failed
         if not submission_result.get('success') and submission_result.get('error'):
@@ -257,7 +259,7 @@ def callback(ch, method, properties, body):
             return
         
         rk = getattr(method, 'routing_key', '') or ''
-        if rk == 'artifact.update' or rk.endswith('artifact.update.queue'):
+        if rk == 'artifact.update' or rk == RABBITMQ_QUEUE_UPDATE:
             success = process_artifact_update(ch, artifact_id, message)
         else:
             success = process_artifact_submission(ch, artifact_id, message)
