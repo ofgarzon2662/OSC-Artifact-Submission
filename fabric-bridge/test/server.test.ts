@@ -23,10 +23,10 @@ describe('fabric-bridge endpoints', () => {
           title: 't',
           description: 'x'.repeat(60),
           manifest: [],
-          keywords: [],
-          links: [],
-          dois: [],
-          fundingAgencies: [],
+          keywords: ['', 'ai'],
+          links: [''],
+          dois: [''],
+          fundingAgencies: [''],
           acknowledgements: '',
           footprint: '0'.repeat(64)
         }

@@ -44,10 +44,10 @@ const artifactDataSchema = Joi.object({
   title: Joi.string().min(1).required(),
   description: Joi.string().min(50).required(),
   manifest: Joi.any().required(),
-  keywords: Joi.array().items(Joi.string()).optional(),
-  links: Joi.array().items(Joi.any()).optional(),
-  dois: Joi.array().items(Joi.string()).optional(),
-  fundingAgencies: Joi.array().items(Joi.any()).optional(),
+  keywords: Joi.array().items(Joi.string().allow('')).optional(),
+  links: Joi.array().items(Joi.string().allow('')).optional(),
+  dois: Joi.array().items(Joi.string().allow('')).optional(),
+  fundingAgencies: Joi.array().items(Joi.string().allow('')).optional(),
   acknowledgements: Joi.string().allow('').optional(),
   footprint: Joi.string().pattern(/^[a-fA-F0-9]{64}$/).required()
 }).required();
