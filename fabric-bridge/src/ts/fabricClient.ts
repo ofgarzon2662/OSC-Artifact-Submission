@@ -170,8 +170,25 @@ export async function submitTxIfReal(
     }
     return { txId, committedAt: now };
   } catch (e: any) {
-    const msg = e?.message || String(e);
-    throw new Error(`Fabric submit failed for ${fn}: ${msg}`);
+    // Enhance error surfacing with peer endorsement details when available
+    let details: any = undefined;
+    const endorsementErrors: Array<{ address?: string; mspId?: string; message?: string }> = [];
+    try {
+      if (Array.isArray(e?.details)) {
+        for (const d of e.details) {
+          if (d && (d.address || d.mspId || d.message)) {
+            endorsementErrors.push({ address: d.address, mspId: d.mspId, message: d.message });
+          }
+        }
+      } else if (e?.details && typeof e.details === 'string') {
+        details = e.details;
+      } else if (e?.cause?.details && typeof e.cause.details === 'string') {
+        details = e.cause.details;
+      }
+    } catch {}
+    const baseMsg = e?.message || String(e);
+    const enriched = endorsementErrors.length > 0 ? { message: baseMsg, endorsementErrors } : (details ? { message: baseMsg, details } : baseMsg);
+    throw new Error(`Fabric submit failed for ${fn}: ${typeof enriched === 'string' ? enriched : JSON.stringify(enriched)}`);
   }
 }
 
@@ -188,8 +205,24 @@ export async function evaluateHistory(
     const json = Buffer.from(result).toString('utf8');
     return json;
   } catch (e: any) {
-    const msg = e?.message || String(e);
-    throw new Error(`Fabric evaluate failed for ${fnName}: ${msg}`);
+    let details: any = undefined;
+    const endorsementErrors: Array<{ address?: string; mspId?: string; message?: string }> = [];
+    try {
+      if (Array.isArray(e?.details)) {
+        for (const d of e.details) {
+          if (d && (d.address || d.mspId || d.message)) {
+            endorsementErrors.push({ address: d.address, mspId: d.mspId, message: d.message });
+          }
+        }
+      } else if (e?.details && typeof e.details === 'string') {
+        details = e.details;
+      } else if (e?.cause?.details && typeof e.cause.details === 'string') {
+        details = e.cause.details;
+      }
+    } catch {}
+    const baseMsg = e?.message || String(e);
+    const enriched = endorsementErrors.length > 0 ? { message: baseMsg, endorsementErrors } : (details ? { message: baseMsg, details } : baseMsg);
+    throw new Error(`Fabric evaluate failed for ${fnName}: ${typeof enriched === 'string' ? enriched : JSON.stringify(enriched)}`);
   }
 }
 
