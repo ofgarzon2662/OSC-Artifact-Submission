@@ -23,3 +23,4 @@ fabric-bridge/wallets
 fabric-bridge/peer0-org1-ca-crt
 fabric-bridge/peer0-org2-ca-crt
 fabric-bridge/peers-bundle.crt
+get_history_worker/ghw-task-def.json
