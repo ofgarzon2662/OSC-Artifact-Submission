@@ -40,6 +40,7 @@ services:
     environment:
       - PORT=4000
       - FABRIC_PEER=${FABRIC_PEER:-localhost:7051}
+      - WALLET_SOURCE=${WALLET_SOURCE:-local}
       - WALLET_PATH=/wallets
       - MSP_ID=${MSP_ID:-Org1MSP}
       - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
