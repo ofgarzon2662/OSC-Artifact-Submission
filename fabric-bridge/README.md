@@ -21,7 +21,7 @@ npm run dev
 Environment (defaults in code):
 - PORT (default 4000)
 - FABRIC_CHANNEL, FABRIC_CHAINCODE
-- FABRIC_PEER (e.g. localhost:17051)
+- FABRIC_PEER (e.g. localhost:7051)
 - WALLET_PATH (filesystem wallet path)
 - MSP_ID, IDENTITY_LABEL
 
