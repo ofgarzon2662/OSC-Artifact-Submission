@@ -52,7 +52,7 @@ def _join_strings(value: Any) -> Optional[str]:
     return None
 
 
-def _build_artifact_body(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_artifact_body(payload: Dict[str, Any], artifact_id: str) -> Dict[str, Any]:
     mandatory_public_fields: Dict[str, Any] = {}
     public_fields: Dict[str, Any] = {}
 
@@ -100,6 +100,7 @@ def _build_artifact_body(payload: Dict[str, Any]) -> Dict[str, Any]:
         public_fields['fundingAgencies'] = funding_agencies
 
     return {
+        'id': artifact_id,
         'mandatory_public_fields': mandatory_public_fields,
         'public_fields': public_fields,
         'private_fields': {}
@@ -146,6 +147,20 @@ def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any]) -> Di
                 response_payload = response.json()
             except ValueError:
                 response_payload = response.text
+            if isinstance(response_payload, dict) and response_payload.get('success') is False:
+                return {
+                    'success': False,
+                    'error': response_payload.get('error', 'External API reported failure'),
+                    'apiStatus': response.status_code,
+                    'apiResponse': response_payload
+                }
+            if isinstance(response_payload, str) and 'peer command failed' in response_payload.lower():
+                return {
+                    'success': False,
+                    'error': response_payload,
+                    'apiStatus': response.status_code,
+                    'apiResponse': response_payload
+                }
             return {
                 'success': True,
                 'apiStatus': response.status_code,
@@ -192,7 +207,7 @@ def submit() -> Any:
     if not isinstance(data.get('description'), str) or not data.get('description', '').strip():
         return jsonify({ 'success': False, 'error': 'Missing description' }), 400
 
-    artifact_body = _build_artifact_body(data)
+    artifact_body = _build_artifact_body(data, artifact_id)
     result = _post_to_external_api(artifact_id, artifact_body)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
@@ -207,7 +222,7 @@ def update() -> Any:
     if not artifact_id:
         return jsonify({ 'success': False, 'error': 'Missing artifactId' }), 400
 
-    artifact_body = _build_artifact_body(patch)
+    artifact_body = _build_artifact_body(patch, artifact_id)
     result = _post_to_external_api(artifact_id, artifact_body)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
