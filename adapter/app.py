@@ -99,11 +99,16 @@ def _build_artifact_body(payload: Dict[str, Any], artifact_id: str) -> Dict[str,
     if funding_agencies is not None:
         public_fields['fundingAgencies'] = funding_agencies
 
+    private_fields: Dict[str, Any] = {}
+    if not private_fields:
+        # Avoid PHP json_decode(..., true) turning {} into [] by adding a placeholder.
+        private_fields['placeholder'] = ''
+
     return {
         'id': artifact_id,
         'mandatory_public_fields': mandatory_public_fields,
         'public_fields': public_fields,
-        'private_fields': {}
+        'private_fields': private_fields
     }
 
 
