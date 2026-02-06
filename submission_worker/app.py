@@ -177,6 +177,8 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
             'manifest': manifest,
             'title': title,
             'description': artifact_data.get('description'),
+            'submission_comment': artifact_data.get('submission_comment'),
+            'contributor': artifact_data.get('contributor'),
             'keywords': artifact_data.get('keywords'),
             'links': artifact_data.get('links'),
             # 'dois' will be added only if non-empty list

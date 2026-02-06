@@ -44,6 +44,7 @@ const artifactDataSchema = Joi.object({
   title: Joi.string().min(1).required(),
   description: Joi.string().min(50).required(),
   manifest: Joi.any().required(),
+  submission_comment: Joi.string().allow('').optional(),
   keywords: Joi.array().items(Joi.string().allow('')).optional(),
   links: Joi.array().items(Joi.any()).optional(),
   dois: Joi.array().items(Joi.string().allow('')).optional(),

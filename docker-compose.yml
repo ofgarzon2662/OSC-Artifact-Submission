@@ -5,9 +5,6 @@ networks:
   osc-api-services-network:
     external: true
     name: osc-api-services-network
-  fabric-network:
-    external: true
-    name: fabric_test
 
 services:
   # RabbitMQ Message Broker with custom configuration
@@ -69,12 +66,34 @@ services:
     - ../OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
     networks:
       - osc-api-services-network
-      - fabric-network
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', (r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 10s
       retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # Adapter (Python)
+  adapter:
+    build:
+      context: ./adapter
+      dockerfile: Dockerfile
+    container_name: osc-adapter
+    environment:
+      ADAPTER_API_URL: ${ADAPTER_API_URL}
+      ADAPTER_API_TOKEN: ${ADAPTER_API_TOKEN}
+      ADAPTER_REQUEST_TIMEOUT_SECONDS: ${ADAPTER_REQUEST_TIMEOUT_SECONDS:-30}
+      ADAPTER_VERIFY_TLS: "false"
+    ports:
+      - "${ADAPTER_PORT:-5000}:5000"
+    networks:
+      - osc-api-services-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 20s
     restart: unless-stopped
 
@@ -94,7 +113,7 @@ services:
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED:-artifact.submitted.queue}
       
       # Fabric Bridge Configuration
-      FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://fabric-bridge:4000}
+      FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://adapter:5000}
       
       # Environment
       ENVIRONMENT: docker
@@ -105,7 +124,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      fabric-bridge:
+      adapter:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
