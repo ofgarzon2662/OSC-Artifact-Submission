@@ -84,6 +84,11 @@ services:
       ADAPTER_API_URL: ${ADAPTER_API_URL}
       ADAPTER_API_TOKEN: ${ADAPTER_API_TOKEN}
       ADAPTER_REQUEST_TIMEOUT_SECONDS: ${ADAPTER_REQUEST_TIMEOUT_SECONDS:-30}
+<<<<<<< HEAD
+      # Set to "true" in production; "false" only for dev/self-signed certs
+      ADAPTER_VERIFY_TLS: "${ADAPTER_VERIFY_TLS:-false}"
+=======
+>>>>>>> 23d4cd600285221f13f30f385ce2a5d974ce3d76
     ports:
       - "${ADAPTER_PORT:-5000}:5000"
     networks:
@@ -177,7 +182,7 @@ services:
       dockerfile: Dockerfile
     container_name: osc-get-history-worker
     environment:
-      BRIDGE_URL: ${BRIDGE_URL}
+      BRIDGE_URL: ${BRIDGE_URL:-http://adapter:5000}
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
       CACHE_MAX_ARTIFACTS: ${CACHE_MAX_ARTIFACTS:-100}
       MAX_PAGE_SIZE: ${MAX_PAGE_SIZE:-500}
@@ -188,7 +193,7 @@ services:
     networks:
       - osc-api-services-network
     depends_on:
-      fabric-bridge:
+      adapter:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health', timeout=5)"]

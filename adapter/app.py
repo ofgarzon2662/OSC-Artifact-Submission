@@ -112,20 +112,25 @@ def _build_artifact_body(payload: Dict[str, Any], artifact_id: str) -> Dict[str,
     }
 
 
-def _resolve_api_url() -> str:
+def _base_api_url() -> str:
     if not API_URL:
         return ''
     if '/v1/' in API_URL:
-        return API_URL
-    return f"{API_URL.rstrip('/')}/v1/artifacts/new"
+        return API_URL[:API_URL.index('/v1/')]
+    return API_URL.rstrip('/')
 
 
-def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any]) -> Dict[str, Any]:
-    api_url = _resolve_api_url()
-    if not api_url:
+def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any], operation: str = 'submit') -> Dict[str, Any]:
+    base = _base_api_url()
+    if not base:
         return { 'success': False, 'error': 'ADAPTER_API_URL is not configured' }
     if not API_TOKEN:
         return { 'success': False, 'error': 'ADAPTER_API_TOKEN is not configured' }
+
+    if operation == 'update':
+        api_url = f"{base}/v1/artifacts/update"
+    else:
+        api_url = f"{base}/v1/artifacts/new"
 
     headers = {
         'Authorization': f'Bearer {API_TOKEN}'
@@ -213,7 +218,7 @@ def submit() -> Any:
         return jsonify({ 'success': False, 'error': 'Missing description' }), 400
 
     artifact_body = _build_artifact_body(data, artifact_id)
-    result = _post_to_external_api(artifact_id, artifact_body)
+    result = _post_to_external_api(artifact_id, artifact_body, operation='submit')
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
 
@@ -228,9 +233,46 @@ def update() -> Any:
         return jsonify({ 'success': False, 'error': 'Missing artifactId' }), 400
 
     artifact_body = _build_artifact_body(patch, artifact_id)
-    result = _post_to_external_api(artifact_id, artifact_body)
+    result = _post_to_external_api(artifact_id, artifact_body, operation='update')
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
+
+
+@app.get('/history/<artifact_id>')
+def get_history(artifact_id: str) -> Any:
+    if not artifact_id or not artifact_id.strip():
+        return jsonify({ 'success': False, 'error': 'Missing artifact_id' }), 400
+
+    base = _base_api_url()
+    if not base:
+        return jsonify({ 'success': False, 'error': 'ADAPTER_API_URL is not configured' }), 502
+    if not API_TOKEN:
+        return jsonify({ 'success': False, 'error': 'ADAPTER_API_TOKEN is not configured' }), 502
+
+    url = f"{base}/v1/artifacts/history/{artifact_id.strip()}"
+    headers = { 'Authorization': f'Bearer {API_TOKEN}' }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            verify=VERIFY_TLS
+        )
+        if response.ok:
+            try:
+                data = response.json()
+            except ValueError:
+                data = response.text
+            return jsonify(data), 200
+        logger.error('OSC-API history error %s: %s', response.status_code, response.text)
+        return jsonify({ 'success': False, 'error': f'OSC-API error {response.status_code}: {response.text}' }), 502
+    except requests.exceptions.Timeout:
+        logger.error('OSC-API history request timed out')
+        return jsonify({ 'success': False, 'error': 'OSC-API history request timed out' }), 502
+    except requests.exceptions.RequestException as exc:
+        logger.error('OSC-API history request failed: %s', str(exc))
+        return jsonify({ 'success': False, 'error': f'OSC-API history request failed: {str(exc)}' }), 502
 
 
 if __name__ == '__main__':
