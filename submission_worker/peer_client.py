@@ -1,13 +1,14 @@
 import requests
 import logging
 import time
+from urllib.parse import urlparse
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class PeerClient:
     """
-    Client for communicating with the fabric-bridge service.
+    Client for communicating with the upstream submit/update service.
     Handles artifact submission and error handling.
     """
     
@@ -16,12 +17,13 @@ class PeerClient:
         Initialize the peer client.
         
         Args:
-            peer_url: Base URL of the fabric-bridge service
+            peer_url: Base URL of the upstream service
             timeout: Request timeout in seconds
         """
         self.peer_url = peer_url.rstrip('/')
         self.timeout = timeout
         self.session = requests.Session()
+        self.service_label = self._resolve_service_label(self.peer_url)
         
         # Set common headers
         self.session.headers.update({
@@ -29,14 +31,27 @@ class PeerClient:
             'User-Agent': 'submission-worker/1.0'
         })
         
-        logger.info(f"Initialized Fabric Bridge client with URL: {self.peer_url}")
+        logger.info(f"Initialized {self.service_label} client with URL: {self.peer_url}")
+
+    @staticmethod
+    def _resolve_service_label(peer_url: str) -> str:
+        parsed_url = urlparse(peer_url)
+        host = (parsed_url.hostname or "").strip().lower()
+
+        if not host:
+            return "upstream-service"
+        if host == "adapter":
+            return "adapter"
+        if host == "fabric-bridge":
+            return "fabric-bridge"
+        return host
     
     def submit_artifact(self, artifact_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Submit an artifact to the blockchain peer.
         
         Args:
-            artifact_data: Dictionary containing artifact information. Expected shape for fabric-bridge:
+            artifact_data: Dictionary containing artifact information. Expected shape:
                 {
                   'artifactId': str,
                   'data': {...}
@@ -55,7 +70,10 @@ class PeerClient:
         url = f"{self.peer_url}/submit"
         
         try:
-            logger.info(f"Submitting artifact {artifact_data.get('artifactId')} to fabric-bridge at {url}")
+            logger.info(
+                f"Submitting artifact {artifact_data.get('artifactId')} to "
+                f"{self.service_label} at {url}"
+            )
             
             response = self.session.post(
                 url,
@@ -64,8 +82,8 @@ class PeerClient:
             )
             
             # Log response for debugging
-            logger.info(f"fabric-bridge response status: {response.status_code}")
-            logger.debug(f"fabric-bridge response body: {response.text}")
+            logger.info(f"{self.service_label} response status: {response.status_code}")
+            logger.debug(f"{self.service_label} response body: {response.text}")
             
             response.raise_for_status()
             
@@ -74,18 +92,18 @@ class PeerClient:
             
             # Validate response format
             if not isinstance(result, dict):
-                raise ValueError("Invalid response format from fabric-bridge")
+                raise ValueError(f"Invalid response format from {self.service_label}")
             
             # Ensure required fields are present
             if 'success' not in result:
-                raise ValueError("Missing 'success' field in fabric-bridge response")
+                raise ValueError(f"Missing 'success' field in {self.service_label} response")
             
             logger.info(f"Artifact {artifact_data.get('artifactId')} submission result: {result.get('success')}")
             
             return result
             
         except requests.exceptions.Timeout:
-            error_msg = f"Timeout communicating with fabric-bridge at {url}"
+            error_msg = f"Timeout communicating with {self.service_label} at {url}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -94,7 +112,7 @@ class PeerClient:
             }
             
         except requests.exceptions.ConnectionError:
-            error_msg = f"Connection error communicating with fabric-bridge at {url}"
+            error_msg = f"Connection error communicating with {self.service_label} at {url}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -103,7 +121,7 @@ class PeerClient:
             }
             
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP error {e.response.status_code} from fabric-bridge: {e.response.text}"
+            error_msg = f"HTTP error {e.response.status_code} from {self.service_label}: {e.response.text}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -112,7 +130,7 @@ class PeerClient:
             }
             
         except (ValueError, KeyError) as e:
-            error_msg = f"Invalid response from fabric-bridge: {str(e)}"
+            error_msg = f"Invalid response from {self.service_label}: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -121,7 +139,7 @@ class PeerClient:
             }
             
         except Exception as e:
-            error_msg = f"Unexpected error communicating with fabric-bridge: {str(e)}"
+            error_msg = f"Unexpected error communicating with {self.service_label}: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -131,7 +149,7 @@ class PeerClient:
 
     def update_artifact(self, artifact_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Submit an update for an artifact to the fabric-bridge service.
+        Submit an update for an artifact to the upstream service.
 
         Args:
             artifact_id: UUID string of the artifact to update
@@ -143,7 +161,7 @@ class PeerClient:
         url = f"{self.peer_url}/update"
 
         try:
-            logger.info(f"Updating artifact {artifact_id} via fabric-bridge at {url}")
+            logger.info(f"Updating artifact {artifact_id} via {self.service_label} at {url}")
 
             response = self.session.post(
                 url,
@@ -151,35 +169,35 @@ class PeerClient:
                 timeout=self.timeout
             )
 
-            logger.info(f"fabric-bridge update response status: {response.status_code}")
-            logger.debug(f"fabric-bridge update response body: {response.text}")
+            logger.info(f"{self.service_label} update response status: {response.status_code}")
+            logger.debug(f"{self.service_label} update response body: {response.text}")
 
             response.raise_for_status()
 
             result = response.json()
             if not isinstance(result, dict) or 'success' not in result:
-                raise ValueError("Invalid response from fabric-bridge for update")
+                raise ValueError(f"Invalid response from {self.service_label} for update")
             logger.info(f"Artifact {artifact_id} update result: {result.get('success')}")
             return result
 
         except requests.exceptions.Timeout:
-            error_msg = f"Timeout communicating with fabric-bridge at {url}"
+            error_msg = f"Timeout communicating with {self.service_label} at {url}"
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
         except requests.exceptions.ConnectionError:
-            error_msg = f"Connection error communicating with fabric-bridge at {url}"
+            error_msg = f"Connection error communicating with {self.service_label} at {url}"
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP error {e.response.status_code} from fabric-bridge: {e.response.text}"
+            error_msg = f"HTTP error {e.response.status_code} from {self.service_label}: {e.response.text}"
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
         except (ValueError, KeyError) as e:
-            error_msg = f"Invalid response from fabric-bridge: {str(e)}"
+            error_msg = f"Invalid response from {self.service_label}: {str(e)}"
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
         except Exception as e:
-            error_msg = f"Unexpected error communicating with fabric-bridge: {str(e)}"
+            error_msg = f"Unexpected error communicating with {self.service_label}: {str(e)}"
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
     

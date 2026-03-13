@@ -22,7 +22,7 @@ app = Flask(__name__)
 API_URL = os.getenv('ADAPTER_API_URL', '').strip()
 API_TOKEN = os.getenv('ADAPTER_API_TOKEN', '').strip()
 REQUEST_TIMEOUT_SECONDS = float(os.getenv('ADAPTER_REQUEST_TIMEOUT_SECONDS', '30'))
-VERIFY_TLS = os.getenv('ADAPTER_VERIFY_TLS', 'true').strip().lower() not in ('0', 'false', 'no')
+VERIFY_TLS = True
 
 # Hard-coded per request
 GROUPNAME = 'OSC.Portal'

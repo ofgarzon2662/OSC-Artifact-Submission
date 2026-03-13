@@ -35,7 +35,7 @@ RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submi
 RABBITMQ_QUEUE_UPDATE = os.getenv('RABBITMQ_QUEUE_UPDATE', 'artifact.update.queue')
 RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
-# Fabric Bridge Configuration (replaces mock peer)
+# Upstream service configuration (adapter-compatible submit/update API)
 if IS_DOCKER:
     FABRIC_BRIDGE_URL = os.getenv('FABRIC_BRIDGE_URL', 'http://fabric-bridge:4000')
 else:
@@ -44,12 +44,12 @@ else:
 # Log environment info
 logger.info(f"Environment: {'Docker' if IS_DOCKER else 'Local'}")
 logger.info(f"RabbitMQ: {RABBITMQ_HOST}:{RABBITMQ_PORT}")
-logger.info(f"Fabric Bridge URL: {FABRIC_BRIDGE_URL}")
+logger.info(f"Upstream submit/update URL: {FABRIC_BRIDGE_URL}")
 logger.info(f"Listening to queue: {RABBITMQ_QUEUE_SUBMIT}")
 logger.info(f"Publishing to queue: {RABBITMQ_QUEUE_SUBMITTED}")
 logger.info(f"Listening for updates on: {RABBITMQ_QUEUE_UPDATE}")
 
-# Initialize fabric-bridge client
+# Initialize upstream submit/update client
 peer_client = PeerClient(FABRIC_BRIDGE_URL)
 
 def publish_artifact_submitted(channel, artifact_id, submission_result):
@@ -135,7 +135,7 @@ def publish_artifact_updated(channel, artifact_id, update_result):
 
 def process_artifact_submission(channel, artifact_id, artifact_data):
     """
-    Process an artifact submission by calling fabric-bridge.
+    Process an artifact submission by calling the upstream submit endpoint.
     """
     logger.info(f"Processing artifact submission for ID: {artifact_id}")
     
@@ -172,7 +172,7 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         if isinstance(artifact_data.get('dois'), list):
             cleaned_dois = [d for d in artifact_data.get('dois', []) if isinstance(d, str) and d.strip()]
 
-        # Build payload for fabric-bridge
+        # Build payload for upstream submit/update API
         data_payload = {
             'manifest': manifest,
             'title': title,
@@ -189,7 +189,7 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         if cleaned_dois:
             data_payload['dois'] = cleaned_dois
 
-        # Call fabric-bridge to submit the artifact. Map message to expected payload
+        # Call upstream submit endpoint. Map message to expected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
             'data': data_payload
@@ -216,7 +216,7 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
 
 def process_artifact_update(channel, artifact_id, patch_data):
     """
-    Process an artifact update by calling fabric-bridge /update.
+    Process an artifact update by calling upstream /update.
     """
     logger.info(f"Processing artifact update for ID: {artifact_id}")
     try:

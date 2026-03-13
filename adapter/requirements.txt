@@ -1,3 +1,10 @@
+<<<<<<< HEAD
 Flask==3.0.3
 requests==2.32.3
 python-dotenv==1.0.1
+=======
+flask
+requests
+python-dotenv
+gunicorn
+>>>>>>> 23d4cd600285221f13f30f385ce2a5d974ce3d76
