@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/adapter"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"
+
+  - package-ecosystem: "pip"
+    directory: "/submission_worker"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"
+
+  - package-ecosystem: "pip"
+    directory: "/submission_listener"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"
+
+  - package-ecosystem: "pip"
+    directory: "/get_history_worker"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"

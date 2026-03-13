@@ -1,5 +1,9 @@
 name: Submission Worker Tests
 
+permissions:
+  contents: read
+  security-events: write
+
 on:
    push:
     paths:
@@ -44,3 +48,30 @@ jobs:
       - name: Enforce minimum coverage
         run: |
           coverage report --fail-under=80
+
+      - name: Build Docker image for scanning
+        working-directory: submission_worker
+        run: docker build -t submission-worker:${{ github.sha }} .
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: submission-worker:${{ github.sha }}
+          format: table
+          exit-code: '0'
+          severity: CRITICAL,HIGH
+
+      - name: Run Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: submission-worker:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif

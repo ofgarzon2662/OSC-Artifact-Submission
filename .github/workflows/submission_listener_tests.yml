@@ -1,5 +1,9 @@
 name: Submission Listener Tests
 
+permissions:
+  contents: read
+  security-events: write
+
 on:
   push:
     paths:
@@ -48,4 +52,30 @@ jobs:
     - name: Run submission listener tests only
       run: |
         timeout 60 pytest test_app.py -v --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=75 || true
- 
+
+    - name: Build Docker image for scanning
+      working-directory: submission_listener
+      run: docker build -t submission-listener:${{ github.sha }} .
+
+    - name: Run Trivy image scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: submission-listener:${{ github.sha }}
+        format: table
+        exit-code: '0'
+        severity: CRITICAL,HIGH
+
+    - name: Run Trivy image scan (SARIF)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: submission-listener:${{ github.sha }}
+        format: sarif
+        output: trivy-results.sarif
+        exit-code: '0'
+        severity: CRITICAL,HIGH
+
+    - name: Upload Trivy SARIF to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: trivy-results.sarif
