@@ -136,11 +136,14 @@ def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any], opera
         'Authorization': f'Bearer {API_TOKEN}'
     }
 
+    OSC_ARTIFACT_PREFIX = 'osc-is-artifact-'
+    prefixed_id = artifact_id if artifact_id.startswith(OSC_ARTIFACT_PREFIX) else f"{OSC_ARTIFACT_PREFIX}{artifact_id}"
+
     form_payload = {
         'groupname': GROUPNAME,
         'apiuserid': APIUSERID,
         'schemaname': SCHEMANAME,
-        'artifactid': artifact_id,
+        'artifactid': prefixed_id,
         'artifactbody': json.dumps(artifact_body)
     }
 
