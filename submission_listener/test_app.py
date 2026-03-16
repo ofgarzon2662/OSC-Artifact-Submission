@@ -64,22 +64,22 @@ def setup_test_environment():
 
 class TestValidateMessage:
     """Test the validate_message function"""
-    
+
     def test_validate_message_success(self, valid_message):
         """Test validation with a valid message"""
-        assert validate_message(valid_message) == True
-    
+        assert validate_message(valid_message, artifact_submitted_schema) == True
+
     def test_validate_message_invalid_state(self, invalid_message):
         """Test validation with invalid submission state"""
-        assert validate_message(invalid_message) == False
-        
+        assert validate_message(invalid_message, artifact_submitted_schema) == False
+
     def test_validate_message_missing_fields(self, missing_fields_message):
         """Test validation with missing required fields"""
-        assert validate_message(missing_fields_message) == False
-        
+        assert validate_message(missing_fields_message, artifact_submitted_schema) == False
+
     def test_validate_message_empty_dict(self):
         """Test validation with empty message"""
-        assert validate_message({}) == False
+        assert validate_message({}, artifact_submitted_schema) == False
 
 class TestUpdateArtifactStatus:
     """Test the update_artifact_status function"""
@@ -635,5 +635,228 @@ class TestAdditionalCoverage:
         request_body = json.loads(request.body)
         assert request_body["submissionState"] == "PENDING"
 
+class TestValidateMessageWithSchema:
+    """Tests for validate_message using the two-argument production signature."""
+
+    def test_validate_submitted_message_success(self):
+        from app import validate_message, artifact_submitted_schema
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "submittedAt": "2023-12-07T15:30:00.000Z",
+            "blockchainTxId": "0x1234567890abcdef1234567890abcdef12345678",
+            "version": "v1",
+        }
+        assert validate_message(msg, artifact_submitted_schema) is True
+
+    def test_validate_submitted_message_missing_field(self):
+        from app import validate_message, artifact_submitted_schema
+        msg = {"artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980", "version": "v1"}
+        assert validate_message(msg, artifact_submitted_schema) is False
+
+    def test_validate_submitted_message_invalid_state(self):
+        from app import validate_message, artifact_submitted_schema
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "UNKNOWN",
+            "submittedAt": "2023-12-07T15:30:00.000Z",
+            "version": "v1",
+        }
+        assert validate_message(msg, artifact_submitted_schema) is False
+
+    def test_validate_updated_message_success(self):
+        from app import validate_message, artifact_updated_schema
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "blockchainTxId": "0xabc123",
+            "version": "v1",
+        }
+        assert validate_message(msg, artifact_updated_schema) is True
+
+    def test_validate_updated_message_failed_requires_error_field(self):
+        from app import validate_message, artifact_updated_schema
+        # FAILED state without error field should fail validation
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "FAILED",
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "version": "v1",
+        }
+        assert validate_message(msg, artifact_updated_schema) is False
+
+    def test_validate_updated_message_failed_with_error_field(self):
+        from app import validate_message, artifact_updated_schema
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "FAILED",
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "error": "update failed: endorsement rejected",
+            "version": "v1",
+        }
+        assert validate_message(msg, artifact_updated_schema) is True
+
+
+class TestCallbackWithArtifactUpdatedRouting:
+    """Tests for callback when routing_key routes to artifact.updated schema."""
+
+    @responses.activate
+    def test_callback_artifact_updated_routing_key_uses_updated_schema(self):
+        """When routing_key is 'artifact.updated', callback should use artifact_updated_schema."""
+        from app import API_GATEWAY_URL
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "blockchainTxId": "0xabc",
+            "version": "v1",
+        }
+        artifact_id = msg["artifactId"]
+
+        responses.add(
+            responses.PATCH,
+            f"{API_GATEWAY_URL}/{artifact_id}",
+            json={"status": "updated"},
+            status=200,
+        )
+
+        channel_mock = Mock()
+        method_mock = Mock()
+        method_mock.delivery_tag = "upd-tag"
+        method_mock.routing_key = "artifact.updated"
+        properties_mock = Mock()
+
+        from app import callback
+        callback(channel_mock, method_mock, properties_mock, json.dumps(msg).encode())
+
+        channel_mock.basic_ack.assert_called_once_with(delivery_tag="upd-tag")
+
+    def test_callback_artifact_updated_routing_key_invalid_message(self):
+        """Invalid artifact.updated message should be rejected without calling update."""
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "FAILED",
+            # missing 'error' field which is required when FAILED
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "version": "v1",
+        }
+
+        channel_mock = Mock()
+        method_mock = Mock()
+        method_mock.delivery_tag = "upd-inv-tag"
+        method_mock.routing_key = "artifact.updated"
+        properties_mock = Mock()
+
+        from app import callback
+        with patch('app.update_artifact_status') as mock_update:
+            callback(channel_mock, method_mock, properties_mock, json.dumps(msg).encode())
+            mock_update.assert_not_called()
+            channel_mock.basic_nack.assert_called_once_with(
+                delivery_tag="upd-inv-tag", requeue=False
+            )
+
+    @responses.activate
+    def test_callback_artifact_updated_queue_suffix_uses_updated_schema(self):
+        """routing_key ending with 'artifact.updated.queue' should also use updated schema."""
+        from app import API_GATEWAY_URL
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "updatedAt": "2023-12-07T15:30:00.000Z",
+            "version": "v1",
+        }
+        artifact_id = msg["artifactId"]
+
+        responses.add(
+            responses.PATCH,
+            f"{API_GATEWAY_URL}/{artifact_id}",
+            json={"status": "updated"},
+            status=200,
+        )
+
+        channel_mock = Mock()
+        method_mock = Mock()
+        method_mock.delivery_tag = "q-upd-tag"
+        method_mock.routing_key = "artifact.updated.queue"
+        properties_mock = Mock()
+
+        from app import callback
+        callback(channel_mock, method_mock, properties_mock, json.dumps(msg).encode())
+        channel_mock.basic_ack.assert_called_once_with(delivery_tag="q-upd-tag")
+
+
+class TestUpdateArtifactStatusAdditional:
+    """Additional tests for update_artifact_status."""
+
+    @responses.activate
+    def test_update_sets_submission_error_on_failed_state(self):
+        """FAILED submissionState with error should include submissionError in PATCH body."""
+        from app import update_artifact_status, API_GATEWAY_URL
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "FAILED",
+            "submittedAt": "2023-12-07T15:30:00.000Z",
+            "error": "endorsement rejected",
+            "version": "v1",
+        }
+        artifact_id = msg["artifactId"]
+
+        responses.add(
+            responses.PATCH,
+            f"{API_GATEWAY_URL}/{artifact_id}",
+            json={"status": "updated"},
+            status=200,
+        )
+
+        result = update_artifact_status(artifact_id, msg)
+        assert result is True
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["submissionState"] == "FAILED"
+        assert "submissionError" in request_body
+        assert request_body["submissionError"] == "endorsement rejected"
+
+    @responses.activate
+    def test_update_includes_updated_at_when_present(self):
+        """updatedAt field should be forwarded to the PATCH body."""
+        from app import update_artifact_status, API_GATEWAY_URL
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "updatedAt": "2023-12-07T16:00:00.000Z",
+            "version": "v1",
+        }
+        artifact_id = msg["artifactId"]
+
+        responses.add(
+            responses.PATCH,
+            f"{API_GATEWAY_URL}/{artifact_id}",
+            json={"status": "updated"},
+            status=200,
+        )
+
+        result = update_artifact_status(artifact_id, msg)
+        assert result is True
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert "updatedAt" in request_body
+        assert request_body["updatedAt"] == "2023-12-07T16:00:00.000Z"
+
+    def test_update_artifact_status_connection_error(self):
+        """ConnectionError should return False."""
+        from app import update_artifact_status
+        msg = {
+            "artifactId": "6a4e924f-fde0-4460-93c5-03bfb8ed7980",
+            "submissionState": "SUCCESS",
+            "submittedAt": "2023-12-07T15:30:00.000Z",
+            "version": "v1",
+        }
+        with patch('app.requests.patch') as mock_patch:
+            mock_patch.side_effect = requests.exceptions.ConnectionError("refused")
+            result = update_artifact_status(msg["artifactId"], msg)
+            assert result is False
+
+
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])

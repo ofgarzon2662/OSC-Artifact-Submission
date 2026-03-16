@@ -28,6 +28,23 @@ services:
       - osc-api-services-network
     restart: unless-stopped
 
+  mock-osc-api:
+    build:
+      context: ./mock-osc-api
+      dockerfile: Dockerfile
+    container_name: osc-mock-osc-api
+    ports:
+      - "3004:3004"
+    networks:
+      - osc-api-services-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3004/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
   # Fabric Bridge (TypeScript)
   fabric-bridge:
     build:
@@ -81,7 +98,7 @@ services:
       dockerfile: Dockerfile
     container_name: osc-adapter
     environment:
-      ADAPTER_API_URL: ${ADAPTER_API_URL}
+      ADAPTER_API_URL: ${ADAPTER_API_URL:-http://mock-osc-api:3004}
       ADAPTER_API_TOKEN: ${ADAPTER_API_TOKEN}
       ADAPTER_REQUEST_TIMEOUT_SECONDS: ${ADAPTER_REQUEST_TIMEOUT_SECONDS:-30}
     ports:

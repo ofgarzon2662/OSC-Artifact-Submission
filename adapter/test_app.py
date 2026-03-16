@@ -232,5 +232,305 @@ class TestBuildArtifactBody(unittest.TestCase):
         self.assertEqual(result['id'], 'my-unique-id')
 
 
+class TestFirstString(unittest.TestCase):
+    """Tests for the _first_string helper."""
+
+    def test_returns_first_non_empty_string_from_list(self):
+        from app import _first_string
+        self.assertEqual(_first_string(['', '  ', 'hello']), 'hello')
+
+    def test_returns_none_for_empty_list(self):
+        from app import _first_string
+        self.assertIsNone(_first_string([]))
+
+    def test_returns_stripped_string_value(self):
+        from app import _first_string
+        self.assertEqual(_first_string('  world  '), 'world')
+
+    def test_returns_none_for_blank_string(self):
+        from app import _first_string
+        self.assertIsNone(_first_string('   '))
+
+    def test_returns_none_for_non_string_non_list(self):
+        from app import _first_string
+        self.assertIsNone(_first_string(None))
+
+
+class TestJoinStrings(unittest.TestCase):
+    """Tests for the _join_strings helper."""
+
+    def test_joins_list_with_commas(self):
+        from app import _join_strings
+        self.assertEqual(_join_strings(['a', 'b', 'c']), 'a,b,c')
+
+    def test_returns_none_for_empty_list(self):
+        from app import _join_strings
+        self.assertIsNone(_join_strings([]))
+
+    def test_returns_none_for_list_of_blank_strings(self):
+        from app import _join_strings
+        self.assertIsNone(_join_strings(['  ', '  ']))
+
+    def test_returns_stripped_string_value(self):
+        from app import _join_strings
+        self.assertEqual(_join_strings('  hello  '), 'hello')
+
+    def test_returns_none_for_blank_string(self):
+        from app import _join_strings
+        self.assertIsNone(_join_strings(''))
+
+
+class TestBaseApiUrl(unittest.TestCase):
+    """Tests for the _base_api_url helper."""
+
+    def test_strips_v1_path_and_returns_base(self):
+        from app import _base_api_url
+        import app as adapter_app
+        original = adapter_app.API_URL
+        adapter_app.API_URL = 'https://host/v1/artifacts'
+        try:
+            result = _base_api_url()
+            self.assertEqual(result, 'https://host')
+        finally:
+            adapter_app.API_URL = original
+
+    def test_returns_empty_string_when_api_url_unset(self):
+        from app import _base_api_url
+        import app as adapter_app
+        original = adapter_app.API_URL
+        adapter_app.API_URL = ''
+        try:
+            result = _base_api_url()
+            self.assertEqual(result, '')
+        finally:
+            adapter_app.API_URL = original
+
+    def test_strips_trailing_slash_when_no_v1(self):
+        from app import _base_api_url
+        import app as adapter_app
+        original = adapter_app.API_URL
+        adapter_app.API_URL = 'https://host/'
+        try:
+            result = _base_api_url()
+            self.assertEqual(result, 'https://host')
+        finally:
+            adapter_app.API_URL = original
+
+
+class TestPostToExternalApiUnconfigured(unittest.TestCase):
+    """Tests for _post_to_external_api when env vars are not configured."""
+
+    def test_returns_failure_when_api_url_empty(self):
+        from app import _post_to_external_api
+        import app as adapter_app
+        original_url = adapter_app.API_URL
+        adapter_app.API_URL = ''
+        try:
+            result = _post_to_external_api('art-1', {})
+            self.assertFalse(result['success'])
+            self.assertIn('ADAPTER_API_URL', result['error'])
+        finally:
+            adapter_app.API_URL = original_url
+
+    def test_returns_failure_when_api_token_empty(self):
+        from app import _post_to_external_api
+        import app as adapter_app
+        original_url = adapter_app.API_URL
+        original_token = adapter_app.API_TOKEN
+        adapter_app.API_URL = 'https://host/v1/artifacts'
+        adapter_app.API_TOKEN = ''
+        try:
+            result = _post_to_external_api('art-1', {})
+            self.assertFalse(result['success'])
+            self.assertIn('ADAPTER_API_TOKEN', result['error'])
+        finally:
+            adapter_app.API_URL = original_url
+            adapter_app.API_TOKEN = original_token
+
+    @patch('app.requests.post')
+    def test_returns_failure_when_response_text_contains_peer_command_failed(self, mock_post):
+        from app import _post_to_external_api
+        import app as adapter_app
+        original_url = adapter_app.API_URL
+        original_token = adapter_app.API_TOKEN
+        adapter_app.API_URL = 'https://host/v1/artifacts'
+        adapter_app.API_TOKEN = 'tok'
+        mock_post.return_value = _mock_response(
+            status_code=200,
+            text='peer command failed: endorsement failed',
+        )
+        # Override json to return string (text response)
+        mock_post.return_value.json.side_effect = ValueError('no json')
+        mock_post.return_value.text = 'peer command failed: endorsement failed'
+        try:
+            result = _post_to_external_api('art-1', {'id': 'art-1', 'mandatory_public_fields': {}, 'public_fields': {}, 'private_fields': {}})
+            self.assertFalse(result['success'])
+        finally:
+            adapter_app.API_URL = original_url
+            adapter_app.API_TOKEN = original_token
+
+    @patch('app.requests.post')
+    def test_returns_failure_on_request_exception(self, mock_post):
+        from app import _post_to_external_api
+        import app as adapter_app
+        import requests as req_lib
+        original_url = adapter_app.API_URL
+        original_token = adapter_app.API_TOKEN
+        adapter_app.API_URL = 'https://host/v1/artifacts'
+        adapter_app.API_TOKEN = 'tok'
+        mock_post.side_effect = req_lib.exceptions.RequestException('connection refused')
+        try:
+            result = _post_to_external_api('art-1', {})
+            self.assertFalse(result['success'])
+            self.assertIn('connection refused', result['error'])
+        finally:
+            adapter_app.API_URL = original_url
+            adapter_app.API_TOKEN = original_token
+
+
+class TestHistoryEndpointAdditional(unittest.TestCase):
+    """Additional tests for /history/<artifact_id> endpoint."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    @patch('app.requests.get')
+    def test_history_timeout_returns_502(self, mock_get):
+        import requests as req_lib
+        mock_get.side_effect = req_lib.exceptions.Timeout()
+        resp = self.client.get('/history/abc-123')
+        self.assertEqual(resp.status_code, 502)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('timed out', data['error'])
+
+    @patch('app.requests.get')
+    def test_history_request_exception_returns_502(self, mock_get):
+        import requests as req_lib
+        mock_get.side_effect = req_lib.exceptions.RequestException('connection refused')
+        resp = self.client.get('/history/abc-123')
+        self.assertEqual(resp.status_code, 502)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('connection refused', data['error'])
+
+    @patch('app.requests.get')
+    def test_history_non_json_response_returns_text(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=200, text='plain text body', json_data=None)
+        resp = self.client.get('/history/abc-123')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_history_api_url_not_configured_returns_502(self):
+        import app as adapter_app
+        original = adapter_app.API_URL
+        adapter_app.API_URL = ''
+        try:
+            resp = self.client.get('/history/abc-123')
+            self.assertEqual(resp.status_code, 502)
+            self.assertFalse(resp.get_json()['success'])
+        finally:
+            adapter_app.API_URL = original
+
+    def test_history_api_token_not_configured_returns_502(self):
+        import app as adapter_app
+        original_url = adapter_app.API_URL
+        original_token = adapter_app.API_TOKEN
+        adapter_app.API_URL = 'https://host/v1/artifacts'
+        adapter_app.API_TOKEN = ''
+        try:
+            resp = self.client.get('/history/abc-123')
+            self.assertEqual(resp.status_code, 502)
+            self.assertFalse(resp.get_json()['success'])
+        finally:
+            adapter_app.API_URL = original_url
+            adapter_app.API_TOKEN = original_token
+
+
+class TestBuildArtifactBodyAdditional(unittest.TestCase):
+    """Additional tests for _build_artifact_body helper."""
+
+    def test_contributor_extracted(self):
+        payload = {'title': 'T', 'description': 'D', 'contributor': 'user@example.com'}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['contributor'], 'user@example.com')
+
+    def test_footprint_extracted(self):
+        fp = 'a' * 64
+        payload = {'title': 'T', 'description': 'D', 'footprint': fp}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['footprint'], fp)
+
+    def test_manifest_extracted(self):
+        manifest = [{'hash': 'a' * 64, 'filename': 'f.txt', 'algorithm': 'sha256'}]
+        payload = {'title': 'T', 'description': 'D', 'manifest': manifest}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['manifest'], manifest)
+
+    def test_acknowledgements_extracted(self):
+        payload = {'title': 'T', 'description': 'D', 'acknowledgements': 'Thanks'}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['acknowledgements'], 'Thanks')
+
+    def test_funding_agencies_extracted(self):
+        payload = {'title': 'T', 'description': 'D', 'fundingAgencies': ['NSF', 'NIH']}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['fundingAgencies'], ['NSF', 'NIH'])
+
+    def test_url_extracted_from_links(self):
+        payload = {'title': 'T', 'description': 'D', 'links': ['https://example.com']}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['public_fields']['url'], 'https://example.com')
+
+    def test_submission_comment_extracted(self):
+        payload = {'title': 'T', 'description': 'D', 'submission_comment': 'My comment'}
+        result = _build_artifact_body(payload, 'art-001')
+        self.assertEqual(result['mandatory_public_fields']['submission_comment'], 'My comment')
+
+    def test_empty_payload_produces_minimal_body(self):
+        result = _build_artifact_body({}, 'art-001')
+        self.assertEqual(result['id'], 'art-001')
+        self.assertEqual(result['mandatory_public_fields'], {})
+        self.assertIn('placeholder', result['private_fields'])
+
+
+class TestUpdateEndpointAdditional(unittest.TestCase):
+    """Additional tests for /update endpoint."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    @patch('app.requests.post')
+    def test_update_timeout_returns_502(self, mock_post):
+        import requests as req_lib
+        mock_post.side_effect = req_lib.exceptions.Timeout()
+        resp = self.client.post('/update', json={'artifactId': 'abc-123', 'patch': {'title': 'T'}})
+        self.assertEqual(resp.status_code, 502)
+        self.assertFalse(resp.get_json()['success'])
+
+    @patch('app.requests.post')
+    def test_update_request_exception_returns_502(self, mock_post):
+        import requests as req_lib
+        mock_post.side_effect = req_lib.exceptions.RequestException('network error')
+        resp = self.client.post('/update', json={'artifactId': 'abc-123', 'patch': {}})
+        self.assertEqual(resp.status_code, 502)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+
+    @patch('app.requests.post')
+    def test_update_artifact_id_prefixed_correctly(self, mock_post):
+        mock_post.return_value = _mock_response(status_code=200, json_data={'success': True})
+        self.client.post('/update', json={'artifactId': 'abc-123', 'patch': {}})
+        call_kwargs = mock_post.call_args[1]
+        self.assertIn('osc-is-artifact-abc-123', call_kwargs['data']['artifactid'])
+
+    @patch('app.requests.post')
+    def test_already_prefixed_artifact_id_not_double_prefixed(self, mock_post):
+        mock_post.return_value = _mock_response(status_code=200, json_data={'success': True})
+        self.client.post('/update', json={'artifactId': 'osc-is-artifact-abc-123', 'patch': {}})
+        call_kwargs = mock_post.call_args[1]
+        # Should NOT double-prefix
+        self.assertNotIn('osc-is-artifact-osc-is-artifact', call_kwargs['data']['artifactid'])
+
+
 if __name__ == '__main__':
     unittest.main()
