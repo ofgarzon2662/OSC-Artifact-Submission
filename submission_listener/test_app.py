@@ -92,14 +92,14 @@ class TestUpdateArtifactStatus:
         # Mock the API response with correct URL format
         responses.add(
             responses.PATCH,
-            f"{API_GATEWAY_URL}/{artifact_id}/status",
+            f"{API_GATEWAY_URL}/{artifact_id}",
             json={"status": "updated"},
             status=200
         )
-        
+
         result = update_artifact_status(artifact_id, valid_message)
         assert result == True
-        
+
         # Verify the request was made correctly
         assert len(responses.calls) == 1
         request = responses.calls[0].request
@@ -115,7 +115,7 @@ class TestUpdateArtifactStatus:
         
         responses.add(
             responses.PATCH,
-            f"{API_GATEWAY_URL}/{artifact_id}/status",
+            f"{API_GATEWAY_URL}/{artifact_id}",
             json={"error": "Bad Request"},
             status=400
         )
@@ -146,7 +146,7 @@ class TestUpdateArtifactStatus:
         with responses.RequestsMock() as rsps:
             rsps.add(
                 responses.PATCH,
-                f"{API_GATEWAY_URL}/{valid_message['artifactId']}/status",
+                f"{API_GATEWAY_URL}/{valid_message['artifactId']}",
                 json={"status": "updated"},
                 status=200
             )
@@ -167,6 +167,7 @@ class TestCallback:
         channel_mock = Mock()
         method_mock = Mock()
         method_mock.delivery_tag = "test-tag"
+        method_mock.routing_key = "artifact.submitted"
         properties_mock = Mock()
         
         body = json.dumps(valid_message).encode()
@@ -230,6 +231,7 @@ class TestCallback:
         channel_mock = Mock()
         method_mock = Mock()
         method_mock.delivery_tag = "test-tag"
+        method_mock.routing_key = "artifact.submitted"
         properties_mock = Mock()
         
         body = json.dumps(valid_message).encode()
@@ -279,12 +281,13 @@ class TestStartRabbitMQConsumer:
             
             # Verify channel setup
             connection_mock.channel.assert_called_once()
-            channel_mock.queue_declare.assert_called_once_with(
-                queue='artifact.submitted.queue', 
+            channel_mock.queue_declare.assert_any_call(
+                queue='artifact.submitted.queue',
                 durable=True
             )
+            assert channel_mock.queue_declare.call_count == 2
             channel_mock.basic_qos.assert_called_once_with(prefetch_count=1)
-            channel_mock.basic_consume.assert_called_once()
+            assert channel_mock.basic_consume.call_count == 2
     
     @patch('app.pika.BlockingConnection')
     @patch('app.time.sleep')
@@ -335,22 +338,23 @@ class TestIntegration:
         # Mock successful API response with correct URL
         responses.add(
             responses.PATCH,
-            f"{API_GATEWAY_URL}/{artifact_id}/status",
+            f"{API_GATEWAY_URL}/{artifact_id}",
             json={"status": "updated"},
             status=200
         )
-        
+
         # Mock RabbitMQ components
         channel_mock = Mock()
         method_mock = Mock()
         method_mock.delivery_tag = "test-tag"
+        method_mock.routing_key = "artifact.submitted"
         properties_mock = Mock()
-        
+
         body = json.dumps(valid_message).encode()
-        
+
         # Process the message
         callback(channel_mock, method_mock, properties_mock, body)
-        
+
         # Verify complete flow
         assert len(responses.calls) == 1
         channel_mock.basic_ack.assert_called_once_with(delivery_tag="test-tag")
@@ -373,17 +377,12 @@ class TestSchemaLoading:
         """Test schema loading from Docker path"""
         mock_exists.return_value = True
         mock_json_load.return_value = {"test": "docker_schema"}
-        
-        # Re-import the function to test
-        import importlib
-        import app
-        importlib.reload(app)
-        
+
         from app import load_schema
         result = load_schema()
-        
+
         assert result == {"test": "docker_schema"}
-    
+
     @patch('app.IS_DOCKER', False)
     @patch('app.os.path.exists')
     @patch('app.open', mock_open(read_data='{"test": "local_schema"}'))
@@ -392,10 +391,10 @@ class TestSchemaLoading:
         """Test schema loading from local path"""
         mock_exists.return_value = True
         mock_json_load.return_value = {"test": "local_schema"}
-        
+
         from app import load_schema
         result = load_schema()
-        
+
         assert result == {"test": "local_schema"}
     
     @patch('app.os.path.exists', return_value=False)
@@ -532,14 +531,14 @@ class TestAdditionalCoverage:
         # Mock the API response
         responses.add(
             responses.PATCH,
-            f"http://localhost:3000/api/v1/artifacts/{artifact_id}/status",
+            f"http://localhost:3000/api/v1/artifacts/{artifact_id}",
             json={"status": "updated"},
             status=200
         )
-        
+
         result = update_artifact_status(artifact_id, message_without_peer)
         assert result == True
-        
+
         # Verify peerId is not in request body
         request_body = json.loads(responses.calls[0].request.body)
         assert "peerId" not in request_body
@@ -558,12 +557,13 @@ class TestAdditionalCoverage:
             "version": "v1"
         }
         
-        validate_message(valid_msg)
+        from app import artifact_submitted_schema
+        validate_message(valid_msg, artifact_submitted_schema)
         # Logger debug should be called for successful validation
-        
+
         # Invalid message should log error
         invalid_msg = {"invalid": "message"}
-        validate_message(invalid_msg)
+        validate_message(invalid_msg, artifact_submitted_schema)
         
         # Verify logger was called
         assert mock_logger.debug.called or mock_logger.error.called
@@ -610,7 +610,7 @@ class TestAdditionalCoverage:
         # Mock successful API response
         responses.add(
             responses.PATCH,
-            f"http://localhost:3000/api/v1/artifacts/{artifact_id}/status",
+            f"http://localhost:3000/api/v1/artifacts/{artifact_id}",
             json={"status": "updated"},
             status=200
         )
@@ -619,6 +619,7 @@ class TestAdditionalCoverage:
         channel_mock = Mock()
         method_mock = Mock()
         method_mock.delivery_tag = "pending-tag"
+        method_mock.routing_key = "artifact.submitted"
         properties_mock = Mock()
         
         body = json.dumps(pending_message).encode()

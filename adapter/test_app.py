@@ -179,9 +179,11 @@ class TestHistory(unittest.TestCase):
         self.client = app.test_client()
 
     @patch('app.requests.get')
-    def test_valid_id_osc_api_returns_list(self, mock_get):
+    def test_valid_id_osc_api_returns_normalized_list(self, mock_get):
+        # Adapter now normalizes blockchain items: generates txId, maps fields
         history_list = [
-            {'txId': 'tx1', 'timestamp': '2024-01-01T00:00:00Z', 'isDelete': False, 'value': {'id': 'abc-123'}}
+            {'ArtifactId': 'osc-is-artifact-abc-123', 'Title': 'T', 'Description': 'D',
+             'Timestamp': '2024-01-01T00:00:00Z', 'PublicCustomFields': {}}
         ]
         mock_get.return_value = _mock_response(status_code=200, json_data=history_list)
         resp = self.client.get('/history/abc-123')
@@ -189,7 +191,12 @@ class TestHistory(unittest.TestCase):
         data = resp.get_json()
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]['txId'], 'tx1')
+        item = data[0]
+        self.assertIn('txId', item)
+        self.assertEqual(len(item['txId']), 64)  # SHA-256 hex digest
+        self.assertEqual(item['timestamp'], '2024-01-01T00:00:00Z')
+        self.assertFalse(item['isDelete'])
+        self.assertEqual(item['value']['title'], 'T')
 
     @patch('app.requests.get')
     def test_osc_api_non_2xx_returns_502(self, mock_get):
@@ -530,6 +537,169 @@ class TestUpdateEndpointAdditional(unittest.TestCase):
         call_kwargs = mock_post.call_args[1]
         # Should NOT double-prefix
         self.assertNotIn('osc-is-artifact-osc-is-artifact', call_kwargs['data']['artifactid'])
+
+
+class TestNormalizeHistoryValue(unittest.TestCase):
+    """Tests for the _normalize_history_value helper."""
+
+    BLOCKCHAIN_ITEM = {
+        'ArtifactId': 'osc-is-artifact-abc-123',
+        'Title': 'My Title',
+        'Description': 'My Description',
+        'Timestamp': '2026-03-17T12:00:00Z',
+        'ContributorName': 'juanpablo',
+        'ContributorUUID': 'uuid-1',
+        'PublicCustomFields': {
+            'footprint': 'deadbeef' * 8,
+            'keywords': 'ai, ml, data',
+            'doi': '10.1234/test',
+            'url': 'https://example.com',
+            'contributor': 'juanpablo@example.edu',
+            'acknowledgements': 'Thanks everyone',
+            'fundingAgencies': ['NSF', 'NIH'],
+            'manifest': [
+                {'algorithm': 'sha256', 'filename': 'f.txt', 'hash': 'abc123'}
+            ],
+        },
+    }
+
+    def _normalize(self, item=None):
+        from app import _normalize_history_value
+        return _normalize_history_value(item or self.BLOCKCHAIN_ITEM)
+
+    def test_title_and_description_extracted(self):
+        v = self._normalize()
+        self.assertEqual(v['title'], 'My Title')
+        self.assertEqual(v['description'], 'My Description')
+
+    def test_id_extracted(self):
+        v = self._normalize()
+        self.assertEqual(v['id'], 'osc-is-artifact-abc-123')
+
+    def test_submission_state_is_success(self):
+        v = self._normalize()
+        self.assertEqual(v['submissionState'], 'SUCCESS')
+
+    def test_submitter_email_from_public_fields_contributor(self):
+        v = self._normalize()
+        self.assertEqual(v['submitterEmail'], 'juanpablo@example.edu')
+
+    def test_submitter_username_from_contributor_name(self):
+        v = self._normalize()
+        self.assertEqual(v['submitterUsername'], 'juanpablo')
+
+    def test_empty_contributor_name_gives_empty_string(self):
+        item = {**self.BLOCKCHAIN_ITEM, 'ContributorName': ''}
+        v = self._normalize(item)
+        self.assertEqual(v['submitterUsername'], '')
+
+    def test_footprint_extracted(self):
+        v = self._normalize()
+        self.assertEqual(v['footprint'], 'deadbeef' * 8)
+
+    def test_keywords_split_into_list(self):
+        v = self._normalize()
+        self.assertEqual(v['keywords'], ['ai', 'ml', 'data'])
+
+    def test_keywords_empty_string_gives_empty_list(self):
+        item = {**self.BLOCKCHAIN_ITEM, 'PublicCustomFields': {**self.BLOCKCHAIN_ITEM['PublicCustomFields'], 'keywords': ''}}
+        v = self._normalize(item)
+        self.assertEqual(v['keywords'], [])
+
+    def test_doi_wrapped_in_list(self):
+        v = self._normalize()
+        self.assertEqual(v['dois'], ['10.1234/test'])
+
+    def test_empty_doi_gives_empty_list(self):
+        item = {**self.BLOCKCHAIN_ITEM, 'PublicCustomFields': {**self.BLOCKCHAIN_ITEM['PublicCustomFields'], 'doi': ''}}
+        v = self._normalize(item)
+        self.assertEqual(v['dois'], [])
+
+    def test_url_wrapped_in_list(self):
+        v = self._normalize()
+        self.assertEqual(v['links'], ['https://example.com'])
+
+    def test_funding_agencies_passthrough(self):
+        v = self._normalize()
+        self.assertEqual(v['fundingAgencies'], ['NSF', 'NIH'])
+
+    def test_manifest_passthrough(self):
+        v = self._normalize()
+        self.assertEqual(len(v['manifest']), 1)
+        self.assertEqual(v['manifest'][0]['filename'], 'f.txt')
+
+    def test_acknowledgements_extracted(self):
+        v = self._normalize()
+        self.assertEqual(v['acknowledgements'], 'Thanks everyone')
+
+    def test_missing_public_custom_fields_returns_safe_defaults(self):
+        item = {'ArtifactId': 'x', 'Title': 'T', 'Description': 'D', 'Timestamp': '2026-01-01Z'}
+        v = self._normalize(item)
+        self.assertIsNone(v['footprint'])
+        self.assertEqual(v['keywords'], [])
+        self.assertEqual(v['dois'], [])
+        self.assertEqual(v['links'], [])
+        self.assertEqual(v['fundingAgencies'], [])
+        self.assertEqual(v['manifest'], [])
+
+
+class TestHistoryNormalizationEndToEnd(unittest.TestCase):
+    """Tests that /history/<id> normalizes blockchain items before returning."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    @patch('app.requests.get')
+    def test_blockchain_list_normalized_to_ghw_format(self, mock_get):
+        raw_item = {
+            'ArtifactId': 'osc-is-artifact-abc-123',
+            'Title': 'My Title',
+            'Description': 'My Description',
+            'Timestamp': '2026-03-17T12:00:00Z',
+            'ContributorName': '',
+            'PublicCustomFields': {
+                'footprint': 'abc',
+                'keywords': 'ai, ml',
+                'doi': '10.1/x',
+                'url': 'https://example.com',
+                'contributor': 'user@example.com',
+                'fundingAgencies': ['NSF'],
+                'manifest': [],
+            },
+        }
+        mock_get.return_value = _mock_response(status_code=200, json_data=[raw_item])
+        resp = self.client.get('/history/abc-123')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertIsInstance(data, list)
+        item = data[0]
+        self.assertIn('txId', item)
+        self.assertIn('timestamp', item)
+        self.assertEqual(item['isDelete'], False)
+        self.assertEqual(item['timestamp'], '2026-03-17T12:00:00Z')
+        v = item['value']
+        self.assertEqual(v['title'], 'My Title')
+        self.assertEqual(v['submissionState'], 'SUCCESS')
+        self.assertEqual(v['submitterEmail'], 'user@example.com')
+        self.assertEqual(v['keywords'], ['ai', 'ml'])
+        self.assertEqual(v['dois'], ['10.1/x'])
+        self.assertEqual(v['links'], ['https://example.com'])
+
+    @patch('app.requests.get')
+    def test_deterministic_tx_id_for_same_timestamp_and_index(self, mock_get):
+        raw_item = {'ArtifactId': 'x', 'Title': 'T', 'Description': 'D', 'Timestamp': '2026-01-01T00:00:00Z'}
+        mock_get.return_value = _mock_response(status_code=200, json_data=[raw_item])
+        resp1 = self.client.get('/history/abc-123')
+        mock_get.return_value = _mock_response(status_code=200, json_data=[raw_item])
+        resp2 = self.client.get('/history/abc-123')
+        self.assertEqual(resp1.get_json()[0]['txId'], resp2.get_json()[0]['txId'])
+
+    @patch('app.requests.get')
+    def test_non_list_response_passed_through_unchanged(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=200, json_data={'error': 'unexpected'})
+        resp = self.client.get('/history/abc-123')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsInstance(resp.get_json(), dict)
 
 
 if __name__ == '__main__':

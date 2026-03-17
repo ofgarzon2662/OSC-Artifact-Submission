@@ -24,3 +24,13 @@ fabric-bridge/peer0-org1-ca-crt
 fabric-bridge/peer0-org2-ca-crt
 fabric-bridge/peers-bundle.crt
 get_history_worker/ghw-task-def.json
+adapter/venv/
+adapter/.coverage
+adapter/htmlcov/
+adapter/.pytest_cache/
+adapter/__pycache__/
+get_history_worker/venv/
+get_history_worker/.coverage
+get_history_worker/htmlcov/
+get_history_worker/.pytest_cache/
+get_history_worker/__pycache__/

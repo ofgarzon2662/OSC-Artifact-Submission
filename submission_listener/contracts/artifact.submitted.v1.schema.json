@@ -32,6 +32,11 @@
         "type": "string",
         "format": "date-time"
       },
+      "peerId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
       "version": {
         "type": "string",
         "const": "v1"

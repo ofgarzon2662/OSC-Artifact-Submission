@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import logging
@@ -50,6 +51,38 @@ def _join_strings(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _normalize_history_value(item: Dict[str, Any]) -> Dict[str, Any]:
+    pcf = item.get('PublicCustomFields') or {}
+
+    raw_keywords = pcf.get('keywords') or ''
+    keywords = [k.strip() for k in raw_keywords.split(',') if k.strip()]
+
+    raw_doi = pcf.get('doi') or ''
+    dois = [raw_doi.strip()] if raw_doi.strip() else []
+
+    raw_url = pcf.get('url') or ''
+    links = [raw_url.strip()] if raw_url.strip() else []
+
+    return {
+        'id': item.get('ArtifactId', ''),
+        'title': item.get('Title', ''),
+        'description': item.get('Description', ''),
+        'submissionState': 'SUCCESS',
+        'submittedAt': item.get('Timestamp'),
+        'submitterUsername': item.get('ContributorName') or '',
+        'submitterEmail': pcf.get('contributor', ''),
+        'footprint': pcf.get('footprint'),
+        'manifest': pcf.get('manifest') or [],
+        'acknowledgements': pcf.get('acknowledgements'),
+        'fundingAgencies': pcf.get('fundingAgencies') or [],
+        'keywords': keywords,
+        'dois': dois,
+        'links': links,
+        'lastTimeVerified': None,
+        'verified': False,
+    }
 
 
 def _build_artifact_body(payload: Dict[str, Any], artifact_id: str) -> Dict[str, Any]:
@@ -252,7 +285,7 @@ def get_history(artifact_id: str) -> Any:
     if not API_TOKEN:
         return jsonify({ 'success': False, 'error': 'ADAPTER_API_TOKEN is not configured' }), 502
 
-    url = f"{base}/v1/artifacts/history/{artifact_id.strip()}"
+    url = f"{base}/v1/artifacts/history/osc-is-artifact-{artifact_id.strip()}"
     headers = { 'Authorization': f'Bearer {API_TOKEN}' }
 
     try:
@@ -267,6 +300,18 @@ def get_history(artifact_id: str) -> Any:
                 data = response.json()
             except ValueError:
                 data = response.text
+            if isinstance(data, list):
+                normalized = []
+                for i, item in enumerate(data):
+                    tx_seed = f"{item.get('Timestamp', '')}-{i}"
+                    tx_id = hashlib.sha256(tx_seed.encode()).hexdigest()
+                    normalized.append({
+                        'txId': tx_id,
+                        'timestamp': item.get('Timestamp') or '',
+                        'isDelete': False,
+                        'value': _normalize_history_value(item)
+                    })
+                return jsonify(normalized), 200
             return jsonify(data), 200
         logger.error('OSC-API history error %s: %s', response.status_code, response.text)
         return jsonify({ 'success': False, 'error': f'OSC-API error {response.status_code}: {response.text}' }), 502
