@@ -28,77 +28,14 @@ services:
       - osc-api-services-network
     restart: unless-stopped
 
-  mock-osc-api:
-    build:
-      context: ./mock-osc-api
-      dockerfile: Dockerfile
-    container_name: osc-mock-osc-api
-    ports:
-      - "3004:3004"
-    networks:
-      - osc-api-services-network
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3004/health', timeout=3)"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-
-  # Fabric Bridge (TypeScript)
-  fabric-bridge:
-    build:
-      context: ./fabric-bridge
-      dockerfile: Dockerfile
-    container_name: fabric-bridge
-    environment:
-      - PORT=4000
-      - FABRIC_PEER=${FABRIC_PEER:-peer0.org1.example.com:7051}
-      - WALLET_SOURCE=${WALLET_SOURCE:-local}
-      - WALLET_PATH=/wallets
-      - MSP_ID=${MSP_ID:-Org1MSP}
-      - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
-      - IDENTITY_FILE_PATH=/wallets/Org1MSP/svc-org1.id
-      - TLS_CERT_PATH=/tls/peer0-org1-ca.crt
-      - TLS_OVERRIDE_HOSTNAME=peer0.org1.example.com
-      - UPDATE_ARGS_MODE=id+patch  
-      - SUBMIT_FN=CreateArtifact
-      - UPDATE_FN=UpdateArtifactDetails
-      - SUBMIT_ARGS_MODE=data-only 
-      - PEER_ENDPOINT=peer0.org1.example.com:7051
-      - FABRIC_CHANNEL=mychannel
-      - FABRIC_CHAINCODE=oscis
-      - ENDORSING_ORGS=Org1MSP,Org2MSP
-      - EVALUATE_DEADLINE_MS=60000
-      - ENDORSE_DEADLINE_MS=30000
-      - SUBMIT_DEADLINE_MS=10000
-      - COMMIT_STATUS_DEADLINE_MS=60000
-      - GRPC_MAX_RECV_BYTES=${GRPC_MAX_RECV_BYTES:-67108864}
-      - GRPC_MAX_SEND_BYTES=${GRPC_MAX_SEND_BYTES:-16777216}
-
-    ports:
-      - "4000:4000"
-    volumes:
-    - ../OSC-Network/wallets:/wallets:ro
-    - ../OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
-    networks:
-      - osc-api-services-network
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', (r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-
-  # Adapter (Python)
+  # Adapter (Python) — bridges submission worker to OSC-API
   adapter:
     build:
       context: ./adapter
       dockerfile: Dockerfile
     container_name: osc-adapter
     environment:
-      ADAPTER_API_URL: ${ADAPTER_API_URL:-http://mock-osc-api:3004}
+      ADAPTER_API_URL: ${ADAPTER_API_URL}
       ADAPTER_API_TOKEN: ${ADAPTER_API_TOKEN}
       ADAPTER_REQUEST_TIMEOUT_SECONDS: ${ADAPTER_REQUEST_TIMEOUT_SECONDS:-30}
     ports:
@@ -127,10 +64,10 @@ services:
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       RABBITMQ_QUEUE_SUBMIT: ${RABBITMQ_QUEUE_SUBMIT:-artifact.submit.queue}
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED:-artifact.submitted.queue}
-      
-      # Fabric Bridge Configuration
+
+      # Upstream service (adapter)
       FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://adapter:5000}
-      
+
       # Environment
       ENVIRONMENT: docker
     ports:
@@ -164,12 +101,13 @@ services:
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED}
       RABBITMQ_QUEUE_UPDATED: ${RABBITMQ_QUEUE_UPDATED:-artifact.updated.queue}
-      
+
       # API Gateway Configuration
-      API_GATEWAY_URL: ${API_GATEWAY_URL}
+      API_GATEWAY_URL: ${API_GATEWAY_URL:-http://osc-api-gateway:3000/api/v1/artifacts}
+      API_GATEWAY_WORKFLOW_URL: ${API_GATEWAY_WORKFLOW_URL:-http://osc-api-gateway:3000/api/v1/workflows}
       SUBMISSION_LISTENER_API_KEY: ${SUBMISSION_LISTENER_API_KEY}
       SUBMISSION_LISTENER_SERVICE_ROLE: ${SUBMISSION_LISTENER_SERVICE_ROLE}
-      
+
       # Environment
       ENVIRONMENT: docker
     ports:
@@ -185,7 +123,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    restart: unless-stopped 
+    restart: unless-stopped
 
   # Get History Worker (FastAPI)
   get_history_worker:

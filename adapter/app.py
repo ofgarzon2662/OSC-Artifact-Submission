@@ -323,6 +323,133 @@ def get_history(artifact_id: str) -> Any:
         return jsonify({ 'success': False, 'error': f'OSC-API history request failed: {str(exc)}' }), 502
 
 
+## ─── Workflow endpoints ───────────────────────────────────────────────────────
+
+def _build_workflow_body(payload: Dict[str, Any], workflow_id: str) -> Dict[str, Any]:
+    body: Dict[str, Any] = {'id': workflow_id}
+
+    if isinstance(payload.get('title'), str) and payload['title'].strip():
+        body['title'] = payload['title']
+    if isinstance(payload.get('description'), str) and payload['description'].strip():
+        body['description'] = payload['description']
+    if isinstance(payload.get('submission_comment'), str):
+        body['submission_comment'] = payload['submission_comment']
+
+    if isinstance(payload.get('keywords'), list):
+        body['keywords'] = [k for k in payload['keywords'] if isinstance(k, str) and k.strip()]
+    if isinstance(payload.get('artifact_ids'), list):
+        body['artifact_ids'] = [a for a in payload['artifact_ids'] if isinstance(a, str) and a.strip()]
+    if isinstance(payload.get('github_repositories'), list):
+        body['github_repositories'] = payload['github_repositories']
+
+    return body
+
+
+def _post_workflow_to_external_api(workflow_id: str, workflow_body: Dict[str, Any], operation: str = 'submit') -> Dict[str, Any]:
+    base = _base_api_url()
+    if not base:
+        return {'success': False, 'error': 'ADAPTER_API_URL is not configured'}
+    if not API_TOKEN:
+        return {'success': False, 'error': 'ADAPTER_API_TOKEN is not configured'}
+
+    if operation == 'update':
+        api_url = f"{base}/v1/workflows/update"
+    else:
+        api_url = f"{base}/v1/workflows/new"
+
+    headers = {'Authorization': f'Bearer {API_TOKEN}'}
+
+    OSC_WORKFLOW_PREFIX = 'osc-is-workflow-'
+    prefixed_id = workflow_id if workflow_id.startswith(OSC_WORKFLOW_PREFIX) else f"{OSC_WORKFLOW_PREFIX}{workflow_id}"
+
+    form_payload = {
+        'groupname': GROUPNAME,
+        'apiuserid': APIUSERID,
+        'workflowid': prefixed_id,
+        'workflowbody': json.dumps(workflow_body)
+    }
+
+    try:
+        response = requests.post(
+            api_url,
+            data=form_payload,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            verify=VERIFY_TLS
+        )
+        if response.ok:
+            try:
+                response_payload = response.json()
+            except ValueError:
+                response_payload = response.text
+            if isinstance(response_payload, dict) and response_payload.get('success') is False:
+                return {
+                    'success': False,
+                    'error': response_payload.get('error', 'External API reported failure'),
+                    'apiStatus': response.status_code,
+                    'apiResponse': response_payload
+                }
+            if isinstance(response_payload, str) and 'peer command failed' in response_payload.lower():
+                return {
+                    'success': False,
+                    'error': response_payload,
+                    'apiStatus': response.status_code,
+                    'apiResponse': response_payload
+                }
+            return {
+                'success': True,
+                'apiStatus': response.status_code,
+                'apiResponse': response_payload
+            }
+        logger.error('External API error %s: %s', response.status_code, response.text)
+        return {
+            'success': False,
+            'error': f'External API error {response.status_code}: {response.text}',
+            'apiStatus': response.status_code,
+            'apiResponse': response.text
+        }
+    except requests.exceptions.Timeout:
+        logger.error('External API workflow request timed out')
+        return {'success': False, 'error': 'External API request timed out'}
+    except requests.exceptions.RequestException as exc:
+        logger.error('External API workflow request failed: %s', str(exc))
+        return {'success': False, 'error': f'External API request failed: {str(exc)}'}
+
+
+@app.post('/workflow/submit')
+def workflow_submit() -> Any:
+    payload = request.get_json(silent=True) or {}
+    workflow_id = payload.get('workflowId')
+    data = payload.get('data') or {}
+
+    if not workflow_id:
+        return jsonify({'success': False, 'error': 'Missing workflowId'}), 400
+    if not isinstance(data.get('title'), str) or not data.get('title', '').strip():
+        return jsonify({'success': False, 'error': 'Missing title'}), 400
+    if not isinstance(data.get('description'), str) or not data.get('description', '').strip():
+        return jsonify({'success': False, 'error': 'Missing description'}), 400
+
+    workflow_body = _build_workflow_body(data, workflow_id)
+    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='submit')
+    status_code = 200 if result.get('success') else 502
+    return jsonify(result), status_code
+
+
+@app.post('/workflow/update')
+def workflow_update() -> Any:
+    payload = request.get_json(silent=True) or {}
+    workflow_id = payload.get('workflowId')
+    patch = payload.get('patch') or {}
+
+    if not workflow_id:
+        return jsonify({'success': False, 'error': 'Missing workflowId'}), 400
+
+    workflow_body = _build_workflow_body(patch, workflow_id)
+    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='update')
+    status_code = 200 if result.get('success') else 502
+    return jsonify(result), status_code
+
+
 if __name__ == '__main__':
     port = int(os.getenv('ADAPTER_PORT', '5000'))
     app.run(host='0.0.0.0', port=port)

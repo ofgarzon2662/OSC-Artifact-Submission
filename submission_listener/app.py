@@ -33,11 +33,17 @@ RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
+# Workflow queues
+RABBITMQ_QUEUE_WORKFLOW_SUBMITTED = os.getenv('RABBITMQ_QUEUE_WORKFLOW_SUBMITTED', 'workflow.submitted.queue')
+RABBITMQ_QUEUE_WORKFLOW_UPDATED = os.getenv('RABBITMQ_QUEUE_WORKFLOW_UPDATED', 'workflow.updated.queue')
+
 # API Gateway URL with environment-aware defaults
 if IS_DOCKER:
     API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://osc-api-gateway:3000/api/v1/artifacts')
+    API_GATEWAY_WORKFLOW_URL = os.getenv('API_GATEWAY_WORKFLOW_URL', 'http://osc-api-gateway:3000/api/v1/workflows')
 else:
     API_GATEWAY_URL = os.getenv('API_GATEWAY_URL', 'http://localhost:3000/api/v1/artifacts')
+    API_GATEWAY_WORKFLOW_URL = os.getenv('API_GATEWAY_WORKFLOW_URL', 'http://localhost:3000/api/v1/workflows')
 
 # IMPORTANT: Never hardcode real API keys in source code
 SUBMISSION_LISTENER_API_KEY = os.getenv('SUBMISSION_LISTENER_API_KEY', 'test-api-key')
@@ -139,6 +145,49 @@ def update_artifact_status(artifact_id, submission_data):
         logger.error(f"Request error updating artifact {artifact_id}: {str(e)}")
         return False
 
+def update_workflow_status(workflow_id, submission_data):
+    """
+    Send a PATCH request to the API Gateway to update a workflow's status.
+    Uses API Key authentication with role-based access control.
+    """
+    url = f"{API_GATEWAY_WORKFLOW_URL}/{workflow_id}"
+
+    patch_data = {
+        'submissionState': submission_data['submissionState']
+    }
+
+    if 'blockchainTxId' in submission_data:
+        patch_data['blockchainTxId'] = submission_data['blockchainTxId']
+    if 'peerId' in submission_data:
+        patch_data['peerId'] = submission_data['peerId']
+    if 'updatedAt' in submission_data:
+        patch_data['updatedAt'] = submission_data['updatedAt']
+    if submission_data['submissionState'] == 'FAILED' and 'error' in submission_data:
+        patch_data['submissionError'] = submission_data['error']
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-API-Key': SUBMISSION_LISTENER_API_KEY,
+        'X-Service-Role': SUBMISSION_LISTENER_SERVICE_ROLE,
+        'User-Agent': 'submission-listener/1.0'
+    }
+
+    try:
+        logger.info(f"Sending PATCH request to {url} for workflow {workflow_id}")
+        response = requests.patch(url, json=patch_data, headers=headers, timeout=10)
+        response.raise_for_status()
+        logger.info(f"Successfully updated workflow {workflow_id} status to {submission_data['submissionState']}")
+        return True
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout updating workflow {workflow_id}")
+        return False
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error updating workflow {workflow_id}: {e.response.status_code} - {e.response.text}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error updating workflow {workflow_id}: {str(e)}")
+        return False
+
 def validate_message(message, schema):
     """Validate message against the provided JSON schema."""
     try:
@@ -156,32 +205,45 @@ def callback(ch, method, properties, body):
     try:
         message = json.loads(body)
         routing_key = getattr(method, 'routing_key', '') or ''
-        
-        # Choose schema based on queue/topic
-        if routing_key == 'artifact.updated' or routing_key.endswith('artifact.updated.queue'):
-            schema = artifact_updated_schema
+
+        # Route workflow messages
+        is_workflow = routing_key in (
+            'workflow.submitted', 'workflow.updated',
+            RABBITMQ_QUEUE_WORKFLOW_SUBMITTED, RABBITMQ_QUEUE_WORKFLOW_UPDATED
+        )
+
+        if is_workflow:
+            workflow_id = message.get('workflowId')
+            if not workflow_id:
+                logger.error("Missing workflowId in workflow message")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            logger.info(f"Processing workflow status update for ID: {workflow_id}")
+            success = update_workflow_status(workflow_id, message)
         else:
-            schema = artifact_submitted_schema
+            # Choose schema based on queue/topic
+            if routing_key == 'artifact.updated' or routing_key.endswith('artifact.updated.queue'):
+                schema = artifact_updated_schema
+            else:
+                schema = artifact_submitted_schema
+
+            # Validate message against schema
+            if not validate_message(message, schema):
+                logger.error("Message validation failed, rejecting message")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+
+            # Extract artifact ID and update status
+            artifact_id = message['artifactId']
+            logger.info(f"Processing artifact submission update for ID: {artifact_id}")
+            success = update_artifact_status(artifact_id, message)
         
-        # Validate message against schema
-        if not validate_message(message, schema):
-            logger.error("Message validation failed, rejecting message")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            return
-        
-        # Extract artifact ID and update status
-        artifact_id = message['artifactId']
-        logger.info(f"Processing artifact submission update for ID: {artifact_id}")
-        
-        success = update_artifact_status(artifact_id, message)
-        
+        msg_id = workflow_id if is_workflow else artifact_id
         if success:
-            # Acknowledge the message
-            logger.info(f"Successfully processed message for artifact {artifact_id}")
+            logger.info(f"Successfully processed {routing_key} message for {msg_id}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            # Don't requeue - just reject the message
-            logger.error(f"Failed to process message for artifact {artifact_id}, rejecting (not requeuing)")
+            logger.error(f"Failed to process {routing_key} message for {msg_id}, rejecting (not requeuing)")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             
     except json.JSONDecodeError as e:
@@ -225,17 +287,20 @@ def start_rabbitmq_consumer():
 
     channel = connection.channel()
     
-    # Ensure queue exists (in case it wasn't created by definitions.json)
+    # Ensure queues exist (in case they weren't created by definitions.json)
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
     channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATED, durable=True)
-    
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_SUBMITTED, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_UPDATED, durable=True)
+
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMITTED, on_message_callback=callback)
     channel.basic_consume(queue=RABBITMQ_QUEUE_UPDATED, on_message_callback=callback)
-    
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_SUBMITTED}")
-    logger.info(f"Started consuming from queue: {RABBITMQ_QUEUE_UPDATED}")
+    channel.basic_consume(queue=RABBITMQ_QUEUE_WORKFLOW_SUBMITTED, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_WORKFLOW_UPDATED, on_message_callback=callback)
+
+    logger.info(f"Started consuming from queues: {RABBITMQ_QUEUE_SUBMITTED}, {RABBITMQ_QUEUE_UPDATED}, {RABBITMQ_QUEUE_WORKFLOW_SUBMITTED}, {RABBITMQ_QUEUE_WORKFLOW_UPDATED}")
     logger.info(f"Using API Gateway URL: {API_GATEWAY_URL}")
     logger.info(f"Service role: {SUBMISSION_LISTENER_SERVICE_ROLE}")
     

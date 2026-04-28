@@ -35,6 +35,12 @@ RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submi
 RABBITMQ_QUEUE_UPDATE = os.getenv('RABBITMQ_QUEUE_UPDATE', 'artifact.update.queue')
 RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
+# Workflow queues
+RABBITMQ_QUEUE_WORKFLOW_SUBMIT = os.getenv('RABBITMQ_QUEUE_WORKFLOW_SUBMIT', 'workflow.submit.queue')
+RABBITMQ_QUEUE_WORKFLOW_SUBMITTED = os.getenv('RABBITMQ_QUEUE_WORKFLOW_SUBMITTED', 'workflow.submitted.queue')
+RABBITMQ_QUEUE_WORKFLOW_UPDATE = os.getenv('RABBITMQ_QUEUE_WORKFLOW_UPDATE', 'workflow.update.queue')
+RABBITMQ_QUEUE_WORKFLOW_UPDATED = os.getenv('RABBITMQ_QUEUE_WORKFLOW_UPDATED', 'workflow.updated.queue')
+
 # Upstream service configuration (adapter-compatible submit/update API)
 if IS_DOCKER:
     FABRIC_BRIDGE_URL = os.getenv('FABRIC_BRIDGE_URL', 'http://fabric-bridge:4000')
@@ -246,33 +252,173 @@ def process_artifact_update(channel, artifact_id, patch_data):
         publish_artifact_updated(channel, artifact_id, { 'success': False, 'error': f"Update processing failed: {str(e)}" })
         return False
 
+def publish_workflow_submitted(channel, workflow_id, submission_result):
+    """Publish a workflow.submitted event to the message queue."""
+    try:
+        message = {
+            'workflowId': workflow_id,
+            'submissionState': 'SUCCESS' if submission_result.get('success') else 'FAILED',
+            'submittedAt': datetime.now(timezone.utc).isoformat(),
+            'version': 'v1'
+        }
+        tx_id = (
+            submission_result.get('txId')
+            or submission_result.get('transactionId')
+            or submission_result.get('txID')
+        )
+        if submission_result.get('success') and tx_id:
+            message['blockchainTxId'] = tx_id
+        if submission_result.get('peerId'):
+            message['peerId'] = submission_result['peerId']
+        if not submission_result.get('success') and submission_result.get('error'):
+            message['error'] = submission_result['error']
+
+        channel.basic_publish(
+            exchange='',
+            routing_key=RABBITMQ_QUEUE_WORKFLOW_SUBMITTED,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2, content_type='application/json')
+        )
+        logger.info(f"Published workflow.submitted event for workflow {workflow_id} with state {message['submissionState']}")
+    except Exception as e:
+        logger.error(f"Failed to publish workflow.submitted event for workflow {workflow_id}: {str(e)}")
+        raise
+
+def publish_workflow_updated(channel, workflow_id, update_result):
+    """Publish a workflow.updated event to the message queue."""
+    try:
+        message = {
+            'workflowId': workflow_id,
+            'submissionState': 'SUCCESS' if update_result.get('success') else 'FAILED',
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+            'version': 'v1'
+        }
+        tx_id = (
+            update_result.get('txId')
+            or update_result.get('transactionId')
+            or update_result.get('txID')
+        )
+        if update_result.get('success') and tx_id:
+            message['blockchainTxId'] = tx_id
+        if not update_result.get('success') and update_result.get('error'):
+            message['error'] = update_result['error']
+
+        channel.basic_publish(
+            exchange='',
+            routing_key=RABBITMQ_QUEUE_WORKFLOW_UPDATED,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2, content_type='application/json')
+        )
+        logger.info(f"Published workflow.updated event for workflow {workflow_id} with state {message['submissionState']}")
+    except Exception as e:
+        logger.error(f"Failed to publish workflow.updated event for workflow {workflow_id}: {str(e)}")
+        raise
+
+def process_workflow_submission(channel, workflow_id, workflow_data):
+    """Process a workflow submission by calling the upstream /workflow/submit endpoint."""
+    logger.info(f"Processing workflow submission for ID: {workflow_id}")
+    try:
+        data_payload = {
+            'title': workflow_data.get('title'),
+            'description': workflow_data.get('description'),
+            'submission_comment': workflow_data.get('submission_comment'),
+            'keywords': workflow_data.get('keywords'),
+            'artifact_ids': workflow_data.get('artifactIds', []),
+            'github_repositories': workflow_data.get('githubRepositories', []),
+            'contributor': workflow_data.get('contributor'),
+        }
+
+        submission_result = peer_client.submit_workflow({
+            'workflowId': workflow_id,
+            'data': data_payload
+        })
+        logger.info(f"Peer submission result for workflow {workflow_id}: {submission_result}")
+        publish_workflow_submitted(channel, workflow_id, submission_result)
+        return True
+    except Exception as e:
+        logger.error(f"Error processing workflow {workflow_id}: {str(e)}")
+        publish_workflow_submitted(channel, workflow_id, {
+            'success': False,
+            'error': f"Submission processing failed: {str(e)}"
+        })
+        return False
+
+def process_workflow_update(channel, workflow_id, patch_data):
+    """Process a workflow update by calling upstream /workflow/update."""
+    logger.info(f"Processing workflow update for ID: {workflow_id}")
+    try:
+        effective_patch = None
+        if isinstance(patch_data, dict) and isinstance(patch_data.get('patch'), dict):
+            effective_patch = patch_data.get('patch')
+        elif isinstance(patch_data, dict):
+            effective_patch = {k: v for k, v in patch_data.items() if k != 'workflowId'}
+        else:
+            effective_patch = {}
+
+        # Normalize camelCase keys to snake_case for the adapter
+        normalized_patch = {
+            'title': effective_patch.get('title'),
+            'description': effective_patch.get('description'),
+            'submission_comment': effective_patch.get('submission_comment'),
+            'keywords': effective_patch.get('keywords'),
+            'artifact_ids': effective_patch.get('artifactIds', effective_patch.get('artifact_ids', [])),
+            'github_repositories': effective_patch.get('githubRepositories', effective_patch.get('github_repositories', [])),
+            'contributor': effective_patch.get('contributor'),
+        }
+
+        update_result = peer_client.update_workflow(workflow_id, normalized_patch)
+        logger.info(f"Peer update result for workflow {workflow_id}: {update_result}")
+        publish_workflow_updated(channel, workflow_id, update_result)
+        return True
+    except Exception as e:
+        logger.error(f"Error processing update for workflow {workflow_id}: {str(e)}")
+        publish_workflow_updated(channel, workflow_id, {'success': False, 'error': f"Update processing failed: {str(e)}"})
+        return False
+
 def callback(ch, method, properties, body):
-    """Handle incoming artifact.submit messages from the RabbitMQ queue."""
+    """Handle incoming artifact.submit and workflow.submit messages from the RabbitMQ queue."""
     logger.info(f"Received message on {getattr(method, 'routing_key', '')}: {body.decode()}")
     
     try:
         message = json.loads(body)
         
-        # Extract artifact information
-        artifact_id = message.get('artifactId')
-        if not artifact_id:
-            logger.error("Missing artifactId in message")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            return
-        
         rk = getattr(method, 'routing_key', '') or ''
-        if rk == 'artifact.update' or rk == RABBITMQ_QUEUE_UPDATE:
-            success = process_artifact_update(ch, artifact_id, message)
+
+        # Route workflow messages
+        if rk in ('workflow.submit', RABBITMQ_QUEUE_WORKFLOW_SUBMIT):
+            workflow_id = message.get('workflowId')
+            if not workflow_id:
+                logger.error("Missing workflowId in workflow.submit message")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            success = process_workflow_submission(ch, workflow_id, message)
+            msg_id = workflow_id
+        elif rk in ('workflow.update', RABBITMQ_QUEUE_WORKFLOW_UPDATE):
+            workflow_id = message.get('workflowId')
+            if not workflow_id:
+                logger.error("Missing workflowId in workflow.update message")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            success = process_workflow_update(ch, workflow_id, message)
+            msg_id = workflow_id
         else:
-            success = process_artifact_submission(ch, artifact_id, message)
-        
+            # Artifact messages
+            artifact_id = message.get('artifactId')
+            if not artifact_id:
+                logger.error("Missing artifactId in message")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            if rk == 'artifact.update' or rk == RABBITMQ_QUEUE_UPDATE:
+                success = process_artifact_update(ch, artifact_id, message)
+            else:
+                success = process_artifact_submission(ch, artifact_id, message)
+            msg_id = artifact_id
+
         if success:
-            # Acknowledge the message
-            logger.info(f"Successfully processed artifact.submit message for artifact {artifact_id}")
+            logger.info(f"Successfully processed {rk} message for {msg_id}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            # Don't requeue - we already published a failure event
-            logger.error(f"Failed to process artifact.submit message for artifact {artifact_id}, rejecting (not requeuing)")
+            logger.error(f"Failed to process {rk} message for {msg_id}, rejecting (not requeuing)")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             
     except json.JSONDecodeError as e:
@@ -321,13 +467,19 @@ def start_rabbitmq_consumer():
     channel.queue_declare(queue=RABBITMQ_QUEUE_SUBMITTED, durable=True)
     channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATE, durable=True)
     channel.queue_declare(queue=RABBITMQ_QUEUE_UPDATED, durable=True)
-    
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_SUBMIT, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_SUBMITTED, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_UPDATE, durable=True)
+    channel.queue_declare(queue=RABBITMQ_QUEUE_WORKFLOW_UPDATED, durable=True)
+
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue=RABBITMQ_QUEUE_SUBMIT, on_message_callback=callback)
     channel.basic_consume(queue=RABBITMQ_QUEUE_UPDATE, on_message_callback=callback)
-    
-    logger.info(f"Started consuming from queues: {RABBITMQ_QUEUE_SUBMIT}, {RABBITMQ_QUEUE_UPDATE}")
+    channel.basic_consume(queue=RABBITMQ_QUEUE_WORKFLOW_SUBMIT, on_message_callback=callback)
+    channel.basic_consume(queue=RABBITMQ_QUEUE_WORKFLOW_UPDATE, on_message_callback=callback)
+
+    logger.info(f"Started consuming from queues: {RABBITMQ_QUEUE_SUBMIT}, {RABBITMQ_QUEUE_UPDATE}, {RABBITMQ_QUEUE_WORKFLOW_SUBMIT}, {RABBITMQ_QUEUE_WORKFLOW_UPDATE}")
     logger.info(f"Ready to process artifact submissions and updates...")
     
     try:

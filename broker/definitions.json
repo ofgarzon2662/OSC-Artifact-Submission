@@ -1,4 +1,9 @@
 {
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
   "exchanges": [
     {
       "name": "artifact.exchange",
@@ -38,6 +43,34 @@
       "durable": true,
       "auto_delete": false,
       "arguments": {}
+    },
+    {
+      "name": "workflow.submit.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "workflow.submitted.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "workflow.update.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "workflow.updated.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
     }
   ],
   "bindings": [
@@ -72,6 +105,38 @@
       "destination_type": "queue",
       "routing_key": "artifact.updated",
       "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "workflow.submit.queue",
+      "destination_type": "queue",
+      "routing_key": "workflow.submit",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "workflow.submitted.queue",
+      "destination_type": "queue",
+      "routing_key": "workflow.submitted",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "workflow.update.queue",
+      "destination_type": "queue",
+      "routing_key": "workflow.update",
+      "arguments": {}
+    },
+    {
+      "source": "artifact.exchange",
+      "vhost": "/",
+      "destination": "workflow.updated.queue",
+      "destination_type": "queue",
+      "routing_key": "workflow.updated",
+      "arguments": {}
     }
   ]
-} 
+}

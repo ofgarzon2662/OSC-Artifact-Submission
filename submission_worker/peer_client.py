@@ -201,6 +201,52 @@ class PeerClient:
             logger.error(error_msg)
             return { 'success': False, 'error': error_msg, 'timestamp': time.time() }
     
+    def submit_workflow(self, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit a workflow to the upstream service."""
+        url = f"{self.peer_url}/workflow/submit"
+        try:
+            logger.info(f"Submitting workflow {workflow_data.get('workflowId')} to {self.service_label} at {url}")
+            response = self.session.post(url, json=workflow_data, timeout=self.timeout)
+            logger.info(f"{self.service_label} workflow submit response status: {response.status_code}")
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict) or 'success' not in result:
+                raise ValueError(f"Invalid response from {self.service_label} for workflow submit")
+            return result
+        except requests.exceptions.Timeout:
+            return {'success': False, 'error': f"Timeout communicating with {self.service_label} at {url}", 'timestamp': time.time()}
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'error': f"Connection error communicating with {self.service_label} at {url}", 'timestamp': time.time()}
+        except requests.exceptions.HTTPError as e:
+            return {'success': False, 'error': f"HTTP error {e.response.status_code} from {self.service_label}: {e.response.text}", 'timestamp': time.time()}
+        except (ValueError, KeyError) as e:
+            return {'success': False, 'error': f"Invalid response from {self.service_label}: {str(e)}", 'timestamp': time.time()}
+        except Exception as e:
+            return {'success': False, 'error': f"Unexpected error communicating with {self.service_label}: {str(e)}", 'timestamp': time.time()}
+
+    def update_workflow(self, workflow_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit an update for a workflow to the upstream service."""
+        url = f"{self.peer_url}/workflow/update"
+        try:
+            logger.info(f"Updating workflow {workflow_id} via {self.service_label} at {url}")
+            response = self.session.post(url, json={'workflowId': workflow_id, 'patch': patch}, timeout=self.timeout)
+            logger.info(f"{self.service_label} workflow update response status: {response.status_code}")
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict) or 'success' not in result:
+                raise ValueError(f"Invalid response from {self.service_label} for workflow update")
+            return result
+        except requests.exceptions.Timeout:
+            return {'success': False, 'error': f"Timeout communicating with {self.service_label} at {url}", 'timestamp': time.time()}
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'error': f"Connection error communicating with {self.service_label} at {url}", 'timestamp': time.time()}
+        except requests.exceptions.HTTPError as e:
+            return {'success': False, 'error': f"HTTP error {e.response.status_code} from {self.service_label}: {e.response.text}", 'timestamp': time.time()}
+        except (ValueError, KeyError) as e:
+            return {'success': False, 'error': f"Invalid response from {self.service_label}: {str(e)}", 'timestamp': time.time()}
+        except Exception as e:
+            return {'success': False, 'error': f"Unexpected error communicating with {self.service_label}: {str(e)}", 'timestamp': time.time()}
+
     def health_check(self) -> bool:
         """
         Check if the peer service is healthy.
