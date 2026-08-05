@@ -35,3 +35,6 @@ get_history_worker/.coverage
 get_history_worker/htmlcov/
 get_history_worker/.pytest_cache/
 get_history_worker/__pycache__/
+# Python security tooling
+__pycache__/
+*.py[cod]

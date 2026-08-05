@@ -1,0 +1,27 @@
+{
+  "packages": {
+    "fsevents": {
+      "versions": [
+        "2.3.3"
+      ],
+      "execute": false,
+      "scripts": {}
+    },
+    "pkcs11js": {
+      "versions": [
+        "2.1.7"
+      ],
+      "execute": true,
+      "scripts": {}
+    },
+    "protobufjs": {
+      "versions": [
+        "7.6.5"
+      ],
+      "execute": true,
+      "scripts": {
+        "postinstall": "node scripts/postinstall"
+      }
+    }
+  }
+}

@@ -1,25 +1,31 @@
-FROM node:20-alpine AS build
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
 WORKDIR /app
+RUN apk add --no-cache python3 make g++
 
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json .npmrc ./
+COPY scripts/security/check_npm_supply_chain.py ./scripts/security/check_npm_supply_chain.py
+COPY security/npm-malware-blocklist.csv security/npm-lifecycle-allowlist.json ./security/
 # Install ALL deps (including dev) for build stage so tsc is available
-RUN npm ci || npm i
+RUN python3 scripts/security/check_npm_supply_chain.py --repo . --offline-reviewed --skip-installed \
+    && npm ci --ignore-scripts --no-audit --fund=false \
+    && npm audit signatures \
+    && npm rebuild pkcs11js@2.1.7 protobufjs@7.6.5 --ignore-scripts=false \
+    && python3 scripts/security/check_npm_supply_chain.py --repo . --offline-reviewed
 
 COPY tsconfig.json ./
 COPY src ./src
 
-RUN npm run build
+RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:20-alpine AS runtime
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
 # Install AWS CLI for S3 access
 RUN apk add --no-cache aws-cli
 
-COPY package.json package-lock.json* ./
-# Install only production deps for runtime image
-RUN npm ci --omit=dev || npm i --omit=dev
+COPY package.json package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
 
 COPY --from=build /app/dist ./dist
 
@@ -58,5 +64,3 @@ RUN echo '#!/bin/sh' > /usr/local/bin/docker-entrypoint.sh && \
 EXPOSE 4000
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]
-
-

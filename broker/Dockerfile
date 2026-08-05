@@ -1,4 +1,4 @@
-FROM rabbitmq:3-management
+FROM rabbitmq:3-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
 
 # Install curl for the initialization script
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
