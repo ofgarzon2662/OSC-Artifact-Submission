@@ -18,6 +18,7 @@ submission_worker/__pycache__
 fabric-bridge/src/wallets
 fabric-bridge/node_modules
 fabric-bridge/dist
+fabric-bridge/coverage
 fabric-bridge/.env
 fabric-bridge/wallets
 fabric-bridge/peer0-org1-ca-crt

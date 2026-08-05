@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -13,4 +13,4 @@ COPY peer_client.py .
 # Expose port for health checks
 EXPOSE 8000
 
-CMD ["python", "app.py"] 
+CMD ["python", "app.py"]

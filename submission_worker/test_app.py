@@ -178,6 +178,32 @@ def test_start_rabbitmq_consumer_success(monkeypatch):
         app.start_rabbitmq_consumer()
         assert mock_info.called
 
+
+def test_start_rabbitmq_consumer_enables_tls_for_amazon_mq(monkeypatch):
+    mock_conn = MagicMock()
+    mock_channel = MagicMock()
+    mock_conn.channel.return_value = mock_channel
+    captured_parameters = {}
+
+    monkeypatch.setattr(app, 'RABBITMQ_TLS', True)
+    monkeypatch.setattr(app, 'RABBITMQ_HOST', 'private-broker.mq.us-west-2.amazonaws.com')
+    monkeypatch.setattr(app.ssl, 'create_default_context', lambda: 'tls-context')
+    monkeypatch.setattr(app.pika, 'SSLOptions', lambda context, host: (context, host))
+    monkeypatch.setattr(app.pika, 'PlainCredentials', lambda user, password: None)
+    monkeypatch.setattr(
+        app.pika,
+        'ConnectionParameters',
+        lambda **kwargs: captured_parameters.update(kwargs) or kwargs,
+    )
+    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda parameters: mock_conn)
+
+    app.start_rabbitmq_consumer()
+
+    assert captured_parameters['ssl_options'] == (
+        'tls-context',
+        'private-broker.mq.us-west-2.amazonaws.com',
+    )
+
 def test_callback_unexpected_error(mock_channel):
     """Test callback handling of unexpected errors (e.g., malformed message structure)."""
     body = json.dumps("a string, not a dict").encode()
@@ -258,7 +284,12 @@ def test_process_artifact_update_success(mock_channel, artifact_id):
         with patch("app.publish_artifact_updated") as mock_publish:
             result = app.process_artifact_update(mock_channel, artifact_id, patch_data)
             assert result is True
-            mock_update.assert_called_once_with(artifact_id, patch_data)
+            mock_update.assert_called_once_with(
+                artifact_id,
+                patch_data,
+                organization=None,
+                contract_version='v1',
+            )
             mock_publish.assert_called_once()
 
 
@@ -274,6 +305,25 @@ def test_process_artifact_update_with_nested_patch(mock_channel, artifact_id):
             assert result is True
             called_patch = mock_update.call_args[0][1]
             assert called_patch == {"footprint": "e" * 64, "keywords": ["kw2"]}
+
+
+def test_process_artifact_update_propagates_organization_route(mock_channel, artifact_id):
+    message = {
+        "artifactId": artifact_id,
+        "patch": {"keywords": ["multi-org"]},
+        "contractVersion": "v2",
+        "organization": {"id": "org-a", "ledgerGroupName": "OSC.OrgA"},
+    }
+    with patch.object(app.peer_client, "update_artifact", return_value={"success": True}) as mock_update:
+        with patch("app.publish_artifact_updated"):
+            assert app.process_artifact_update(mock_channel, artifact_id, message) is True
+
+    mock_update.assert_called_once_with(
+        artifact_id,
+        {"keywords": ["multi-org"]},
+        organization=message["organization"],
+        contract_version="v2",
+    )
 
 
 def test_process_artifact_update_invalid_footprint(mock_channel, artifact_id):

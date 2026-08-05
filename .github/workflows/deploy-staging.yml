@@ -1,0 +1,98 @@
+name: Deploy staging component
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component to deploy
+        required: true
+        type: choice
+        options:
+          - adapter
+          - submission_listener
+          - submission_worker
+          - get_history_worker
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: artifact-submission-${{ inputs.component }}-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    steps:
+      - uses: actions/checkout@v6
+      - name: Resolve deployment metadata
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.component }}" in
+            adapter)
+              echo "role=osc-github-deploy-adapter" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-adapter" >> "$GITHUB_OUTPUT"
+              echo "task=osc-adapter" >> "$GITHUB_OUTPUT"
+              echo "container=adapter" >> "$GITHUB_OUTPUT"
+              echo "service=osc-adapter" >> "$GITHUB_OUTPUT"
+              ;;
+            submission_listener)
+              echo "role=osc-github-deploy-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "task=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "container=submission-listener" >> "$GITHUB_OUTPUT"
+              echo "service=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              ;;
+            submission_worker)
+              echo "role=osc-github-deploy-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "task=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "container=submission-worker" >> "$GITHUB_OUTPUT"
+              echo "service=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              ;;
+            get_history_worker)
+              echo "role=osc-github-deploy-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "task=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "container=get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "service=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::269624229733:role/${{ steps.target.outputs.role }}
+          aws-region: us-west-2
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push immutable image
+        id: image
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ steps.target.outputs.repository }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$REPOSITORY:$GITHUB_SHA"
+          docker build --tag "$image" ./${{ inputs.component }}
+          docker push "$image"
+          echo "uri=$image" >> "$GITHUB_OUTPUT"
+      - name: Read current task definition
+        run: aws ecs describe-task-definition --task-definition ${{ steps.target.outputs.task }} --query taskDefinition > task-definition.json
+      - id: task
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ steps.target.outputs.container }}
+          image: ${{ steps.image.outputs.uri }}
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task.outputs.task-definition }}
+          service: ${{ steps.target.outputs.service }}
+          cluster: osc-staging
+          wait-for-service-stability: true
+

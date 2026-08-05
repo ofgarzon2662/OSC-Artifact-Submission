@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 import pika
 import logging
 import time
@@ -30,6 +31,9 @@ RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localho
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
+RABBITMQ_TLS = os.getenv(
+    'RABBITMQ_TLS', 'true' if RABBITMQ_PORT == 5671 else 'false'
+).lower() == 'true'
 RABBITMQ_QUEUE_SUBMIT = os.getenv('RABBITMQ_QUEUE_SUBMIT') or os.getenv('RABBITMQ_QUEUE_CREATED', 'artifact.submit.queue')
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 RABBITMQ_QUEUE_UPDATE = os.getenv('RABBITMQ_QUEUE_UPDATE', 'artifact.update.queue')
@@ -198,7 +202,9 @@ def process_artifact_submission(channel, artifact_id, artifact_data):
         # Call upstream submit endpoint. Map message to expected payload
         submission_result = peer_client.submit_artifact({
             'artifactId': artifact_id,
-            'data': data_payload
+            'data': data_payload,
+            'contractVersion': artifact_data.get('contractVersion', 'v1'),
+            'organization': artifact_data.get('organization'),
         })
         
         logger.info(f"Peer submission result for artifact {artifact_id}: {submission_result}")
@@ -226,13 +232,16 @@ def process_artifact_update(channel, artifact_id, patch_data):
     """
     logger.info(f"Processing artifact update for ID: {artifact_id}")
     try:
+        message_metadata = patch_data if isinstance(patch_data, dict) else {}
         # Support both shapes: {artifactId, patch:{...}} and flat {artifactId, ...fields}
         effective_patch = None
         if isinstance(patch_data, dict) and isinstance(patch_data.get('patch'), dict):
             effective_patch = patch_data.get('patch')
         elif isinstance(patch_data, dict):
-            # Shallow copy without artifactId
-            effective_patch = {k: v for k, v in patch_data.items() if k != 'artifactId'}
+            routing_keys = {'artifactId', 'contractVersion', 'organization'}
+            effective_patch = {
+                k: v for k, v in patch_data.items() if k not in routing_keys
+            }
         else:
             effective_patch = {}
 
@@ -243,7 +252,12 @@ def process_artifact_update(channel, artifact_id, patch_data):
             publish_artifact_updated(channel, artifact_id, { 'success': False, 'error': error_msg })
             return False
 
-        update_result = peer_client.update_artifact(artifact_id, effective_patch)
+        update_result = peer_client.update_artifact(
+            artifact_id,
+            effective_patch,
+            organization=message_metadata.get('organization'),
+            contract_version=message_metadata.get('contractVersion', 'v1'),
+        )
         logger.info(f"Peer update result for artifact {artifact_id}: {update_result}")
         publish_artifact_updated(channel, artifact_id, update_result)
         return True
@@ -330,7 +344,9 @@ def process_workflow_submission(channel, workflow_id, workflow_data):
 
         submission_result = peer_client.submit_workflow({
             'workflowId': workflow_id,
-            'data': data_payload
+            'data': data_payload,
+            'contractVersion': workflow_data.get('contractVersion', 'v1'),
+            'organization': workflow_data.get('organization'),
         })
         logger.info(f"Peer submission result for workflow {workflow_id}: {submission_result}")
         publish_workflow_submitted(channel, workflow_id, submission_result)
@@ -347,11 +363,15 @@ def process_workflow_update(channel, workflow_id, patch_data):
     """Process a workflow update by calling upstream /workflow/update."""
     logger.info(f"Processing workflow update for ID: {workflow_id}")
     try:
+        message_metadata = patch_data if isinstance(patch_data, dict) else {}
         effective_patch = None
         if isinstance(patch_data, dict) and isinstance(patch_data.get('patch'), dict):
             effective_patch = patch_data.get('patch')
         elif isinstance(patch_data, dict):
-            effective_patch = {k: v for k, v in patch_data.items() if k != 'workflowId'}
+            routing_keys = {'workflowId', 'contractVersion', 'organization'}
+            effective_patch = {
+                k: v for k, v in patch_data.items() if k not in routing_keys
+            }
         else:
             effective_patch = {}
 
@@ -366,7 +386,12 @@ def process_workflow_update(channel, workflow_id, patch_data):
             'contributor': effective_patch.get('contributor'),
         }
 
-        update_result = peer_client.update_workflow(workflow_id, normalized_patch)
+        update_result = peer_client.update_workflow(
+            workflow_id,
+            normalized_patch,
+            organization=message_metadata.get('organization'),
+            contract_version=message_metadata.get('contractVersion', 'v1'),
+        )
         logger.info(f"Peer update result for workflow {workflow_id}: {update_result}")
         publish_workflow_updated(channel, workflow_id, update_result)
         return True
@@ -440,10 +465,15 @@ def start_rabbitmq_consumer():
     while not connection and retry_count < max_retries:
         try:
             credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+            ssl_options = None
+            if RABBITMQ_TLS:
+                ssl_options = pika.SSLOptions(ssl.create_default_context(), RABBITMQ_HOST)
+
             parameters = pika.ConnectionParameters(
                 host=RABBITMQ_HOST,
                 port=RABBITMQ_PORT,
                 credentials=credentials,
+                ssl_options=ssl_options,
                 heartbeat=600,
                 connection_attempts=3,
                 retry_delay=2
@@ -542,4 +572,4 @@ if __name__ == "__main__":
     health_thread.start()
     
     # Start RabbitMQ consumer (main thread)
-    start_rabbitmq_consumer() 
+    start_rabbitmq_consumer()

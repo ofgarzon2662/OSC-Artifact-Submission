@@ -147,7 +147,13 @@ class PeerClient:
                 'timestamp': time.time()
             }
 
-    def update_artifact(self, artifact_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    def update_artifact(
+        self,
+        artifact_id: str,
+        patch: Dict[str, Any],
+        organization: Dict[str, Any] | None = None,
+        contract_version: str = 'v1',
+    ) -> Dict[str, Any]:
         """
         Submit an update for an artifact to the upstream service.
 
@@ -165,7 +171,12 @@ class PeerClient:
 
             response = self.session.post(
                 url,
-                json={ 'artifactId': artifact_id, 'patch': patch },
+                json={
+                    'artifactId': artifact_id,
+                    'patch': patch,
+                    'contractVersion': contract_version,
+                    'organization': organization,
+                },
                 timeout=self.timeout
             )
 
@@ -224,12 +235,27 @@ class PeerClient:
         except Exception as e:
             return {'success': False, 'error': f"Unexpected error communicating with {self.service_label}: {str(e)}", 'timestamp': time.time()}
 
-    def update_workflow(self, workflow_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    def update_workflow(
+        self,
+        workflow_id: str,
+        patch: Dict[str, Any],
+        organization: Dict[str, Any] | None = None,
+        contract_version: str = 'v1',
+    ) -> Dict[str, Any]:
         """Submit an update for a workflow to the upstream service."""
         url = f"{self.peer_url}/workflow/update"
         try:
             logger.info(f"Updating workflow {workflow_id} via {self.service_label} at {url}")
-            response = self.session.post(url, json={'workflowId': workflow_id, 'patch': patch}, timeout=self.timeout)
+            response = self.session.post(
+                url,
+                json={
+                    'workflowId': workflow_id,
+                    'patch': patch,
+                    'contractVersion': contract_version,
+                    'organization': organization,
+                },
+                timeout=self.timeout,
+            )
             logger.info(f"{self.service_label} workflow update response status: {response.status_code}")
             response.raise_for_status()
             result = response.json()
@@ -266,4 +292,4 @@ class PeerClient:
     def close(self):
         """Close the session and cleanup resources."""
         self.session.close()
-        logger.info("PeerClient session closed") 
+        logger.info("PeerClient session closed")

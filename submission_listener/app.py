@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 import pika
 import requests
 import logging
@@ -30,6 +31,9 @@ RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'rabbitmq' if IS_DOCKER else 'localho
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'user')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'password')
+RABBITMQ_TLS = os.getenv(
+    'RABBITMQ_TLS', 'true' if RABBITMQ_PORT == 5671 else 'false'
+).lower() == 'true'
 RABBITMQ_QUEUE_SUBMITTED = os.getenv('RABBITMQ_QUEUE_SUBMITTED', 'artifact.submitted.queue')
 RABBITMQ_QUEUE_UPDATED = os.getenv('RABBITMQ_QUEUE_UPDATED', 'artifact.updated.queue')
 
@@ -265,10 +269,15 @@ def start_rabbitmq_consumer():
     while not connection and retry_count < max_retries:
         try:
             credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+            ssl_options = None
+            if RABBITMQ_TLS:
+                ssl_options = pika.SSLOptions(ssl.create_default_context(), RABBITMQ_HOST)
+
             parameters = pika.ConnectionParameters(
                 host=RABBITMQ_HOST,
                 port=RABBITMQ_PORT,
                 credentials=credentials,
+                ssl_options=ssl_options,
                 heartbeat=600,
                 connection_attempts=3,
                 retry_delay=2

@@ -702,5 +702,71 @@ class TestHistoryNormalizationEndToEnd(unittest.TestCase):
         self.assertIsInstance(resp.get_json(), dict)
 
 
+class TestOrganizationRouting(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
+
+    @patch('app.requests.post')
+    def test_v2_message_uses_embedded_organization_route(self, mock_post):
+        mock_post.return_value = _mock_response(
+            status_code=200, json_data={'success': True}
+        )
+        payload = {
+            **VALID_SUBMIT_PAYLOAD,
+            'contractVersion': 'v2',
+            'organization': {
+                'id': 'org-a',
+                'ledgerGroupName': 'OSC.OrgA',
+                'ledgerApiUserId': 'org.a.portal',
+                'artifactSchemaName': 'org.a.dataset',
+            },
+        }
+
+        response = self.client.post('/submit', json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        form = mock_post.call_args.kwargs['data']
+        self.assertEqual(form['groupname'], 'OSC.OrgA')
+        self.assertEqual(form['apiuserid'], 'org.a.portal')
+        self.assertEqual(form['schemaname'], 'org.a.dataset')
+
+    def test_v2_message_fails_closed_when_route_is_missing(self):
+        payload = {
+            **VALID_SUBMIT_PAYLOAD,
+            'contractVersion': 'v2',
+            'organization': {'id': 'unknown-org'},
+        }
+        with patch.object(adapter_app, 'ALLOW_LEGACY_DEFAULT_ROUTE', False):
+            response = self.client.post('/submit', json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('no configured ledger route fields', response.get_json()['error'])
+
+    @patch('app.requests.post')
+    def test_route_map_can_supply_organization_configuration(self, mock_post):
+        mock_post.return_value = _mock_response(
+            status_code=200, json_data={'success': True}
+        )
+        payload = {
+            **VALID_SUBMIT_PAYLOAD,
+            'contractVersion': 'v2',
+            'organization': {'id': 'org-b'},
+        }
+        routes = {
+            'org-b': {
+                'groupName': 'OSC.OrgB',
+                'apiUserId': 'org.b.portal',
+                'artifactSchemaName': 'org.b.dataset',
+            }
+        }
+        with patch.object(adapter_app, 'ORGANIZATION_ROUTES', routes), patch.object(
+            adapter_app, 'ALLOW_LEGACY_DEFAULT_ROUTE', False
+        ):
+            response = self.client.post('/submit', json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_post.call_args.kwargs['data']['groupname'], 'OSC.OrgB')
+
+
 if __name__ == '__main__':
     unittest.main()

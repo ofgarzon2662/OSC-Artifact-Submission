@@ -8,6 +8,7 @@ import requests
 import os
 import tempfile
 from unittest.mock import mock_open
+import app as listener_app
 
 # Import the functions we want to test
 from app import (
@@ -285,9 +286,39 @@ class TestStartRabbitMQConsumer:
                 queue='artifact.submitted.queue',
                 durable=True
             )
-            assert channel_mock.queue_declare.call_count == 2
+            assert channel_mock.queue_declare.call_count == 4
             channel_mock.basic_qos.assert_called_once_with(prefetch_count=1)
-            assert channel_mock.basic_consume.call_count == 2
+            assert channel_mock.basic_consume.call_count == 4
+
+    @patch('app.pika.BlockingConnection')
+    @patch('app.pika.ConnectionParameters')
+    @patch('app.pika.PlainCredentials')
+    @patch('app.pika.SSLOptions')
+    @patch('app.ssl.create_default_context')
+    def test_start_rabbitmq_consumer_enables_tls_for_amazon_mq(
+        self,
+        mock_context,
+        mock_ssl_options,
+        mock_creds,
+        mock_params,
+        mock_connection,
+    ):
+        connection = Mock()
+        channel = Mock()
+        connection.channel.return_value = channel
+        channel.start_consuming.side_effect = KeyboardInterrupt()
+        mock_connection.return_value = connection
+        mock_context.return_value = 'tls-context'
+
+        with patch.object(listener_app, 'RABBITMQ_TLS', True), patch.object(
+            listener_app, 'RABBITMQ_HOST', 'private-broker.mq.us-west-2.amazonaws.com'
+        ):
+            start_rabbitmq_consumer()
+
+        mock_ssl_options.assert_called_once_with(
+            'tls-context', 'private-broker.mq.us-west-2.amazonaws.com'
+        )
+        assert mock_params.call_args.kwargs['ssl_options'] == mock_ssl_options.return_value
     
     @patch('app.pika.BlockingConnection')
     @patch('app.time.sleep')

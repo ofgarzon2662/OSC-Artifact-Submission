@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -16,4 +16,4 @@ COPY contracts/artifact.updated.v1.schema.json /app/schema/
 # Copy application code
 COPY app.py .
 
-CMD ["python", "app.py"] 
+CMD ["python", "app.py"]

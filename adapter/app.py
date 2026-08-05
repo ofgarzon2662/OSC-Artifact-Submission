@@ -3,7 +3,7 @@ import json
 import os
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -25,10 +25,57 @@ API_TOKEN = os.getenv('ADAPTER_API_TOKEN', '').strip()
 REQUEST_TIMEOUT_SECONDS = float(os.getenv('ADAPTER_REQUEST_TIMEOUT_SECONDS', '30'))
 VERIFY_TLS = True
 
-# Hard-coded per request
-GROUPNAME = 'OSC.Portal'
-APIUSERID = 'osc.portal.admin'
-SCHEMANAME = 'osc.portal.dataset'
+DEFAULT_GROUP_NAME = os.getenv('ADAPTER_DEFAULT_GROUP_NAME', 'OSC.Portal').strip()
+DEFAULT_API_USER_ID = os.getenv('ADAPTER_DEFAULT_API_USER_ID', 'osc.portal.admin').strip()
+DEFAULT_SCHEMA_NAME = os.getenv('ADAPTER_DEFAULT_SCHEMA_NAME', 'osc.portal.dataset').strip()
+ALLOW_LEGACY_DEFAULT_ROUTE = os.getenv(
+    'ADAPTER_ALLOW_LEGACY_DEFAULT_ROUTE', 'true'
+).strip().lower() == 'true'
+
+
+def _load_organization_routes() -> Dict[str, Dict[str, str]]:
+    raw = os.getenv('OSC_ORGANIZATION_ROUTES_JSON', '{}').strip() or '{}'
+    try:
+        routes = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError('OSC_ORGANIZATION_ROUTES_JSON is not valid JSON') from exc
+    if not isinstance(routes, dict):
+        raise RuntimeError('OSC_ORGANIZATION_ROUTES_JSON must contain an object')
+    return routes
+
+
+ORGANIZATION_ROUTES = _load_organization_routes()
+
+
+def _resolve_ledger_route(
+    payload: Dict[str, Any], require_schema: bool
+) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    organization = payload.get('organization') or {}
+    organization_id = organization.get('id') if isinstance(organization, dict) else None
+    configured = ORGANIZATION_ROUTES.get(organization_id, {}) if organization_id else {}
+
+    route = {
+        'groupname': organization.get('ledgerGroupName') or configured.get('groupName'),
+        'apiuserid': organization.get('ledgerApiUserId') or configured.get('apiUserId'),
+        'schemaname': organization.get('artifactSchemaName') or configured.get('artifactSchemaName'),
+    }
+
+    is_versioned = payload.get('contractVersion') == 'v2'
+    if is_versioned and not ALLOW_LEGACY_DEFAULT_ROUTE:
+        required = ['groupname', 'apiuserid']
+        if require_schema:
+            required.append('schemaname')
+        missing = [key for key in required if not route.get(key)]
+        if missing:
+            return None, (
+                f"Organization {organization_id or '<missing>'} has no configured "
+                f"ledger route fields: {', '.join(missing)}"
+            )
+
+    route['groupname'] = route['groupname'] or DEFAULT_GROUP_NAME
+    route['apiuserid'] = route['apiuserid'] or DEFAULT_API_USER_ID
+    route['schemaname'] = route['schemaname'] or DEFAULT_SCHEMA_NAME
+    return route, None
 
 
 def _first_string(value: Any) -> Optional[str]:
@@ -153,7 +200,12 @@ def _base_api_url() -> str:
     return API_URL.rstrip('/')
 
 
-def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any], operation: str = 'submit') -> Dict[str, Any]:
+def _post_to_external_api(
+    artifact_id: str,
+    artifact_body: Dict[str, Any],
+    operation: str = 'submit',
+    route: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     base = _base_api_url()
     if not base:
         return { 'success': False, 'error': 'ADAPTER_API_URL is not configured' }
@@ -172,10 +224,15 @@ def _post_to_external_api(artifact_id: str, artifact_body: Dict[str, Any], opera
     OSC_ARTIFACT_PREFIX = 'osc-is-artifact-'
     prefixed_id = artifact_id if artifact_id.startswith(OSC_ARTIFACT_PREFIX) else f"{OSC_ARTIFACT_PREFIX}{artifact_id}"
 
+    ledger_route = route or {
+        'groupname': DEFAULT_GROUP_NAME,
+        'apiuserid': DEFAULT_API_USER_ID,
+        'schemaname': DEFAULT_SCHEMA_NAME,
+    }
     form_payload = {
-        'groupname': GROUPNAME,
-        'apiuserid': APIUSERID,
-        'schemaname': SCHEMANAME,
+        'groupname': ledger_route['groupname'],
+        'apiuserid': ledger_route['apiuserid'],
+        'schemaname': ledger_route['schemaname'],
         'artifactid': prefixed_id,
         'artifactbody': json.dumps(artifact_body)
     }
@@ -253,8 +310,12 @@ def submit() -> Any:
     if not isinstance(data.get('description'), str) or not data.get('description', '').strip():
         return jsonify({ 'success': False, 'error': 'Missing description' }), 400
 
+    route, route_error = _resolve_ledger_route(payload, require_schema=True)
+    if route_error:
+        return jsonify({'success': False, 'error': route_error}), 400
+
     artifact_body = _build_artifact_body(data, artifact_id)
-    result = _post_to_external_api(artifact_id, artifact_body, operation='submit')
+    result = _post_to_external_api(artifact_id, artifact_body, operation='submit', route=route)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
 
@@ -268,8 +329,12 @@ def update() -> Any:
     if not artifact_id:
         return jsonify({ 'success': False, 'error': 'Missing artifactId' }), 400
 
+    route, route_error = _resolve_ledger_route(payload, require_schema=True)
+    if route_error:
+        return jsonify({'success': False, 'error': route_error}), 400
+
     artifact_body = _build_artifact_body(patch, artifact_id)
-    result = _post_to_external_api(artifact_id, artifact_body, operation='update')
+    result = _post_to_external_api(artifact_id, artifact_body, operation='update', route=route)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
 
@@ -345,7 +410,12 @@ def _build_workflow_body(payload: Dict[str, Any], workflow_id: str) -> Dict[str,
     return body
 
 
-def _post_workflow_to_external_api(workflow_id: str, workflow_body: Dict[str, Any], operation: str = 'submit') -> Dict[str, Any]:
+def _post_workflow_to_external_api(
+    workflow_id: str,
+    workflow_body: Dict[str, Any],
+    operation: str = 'submit',
+    route: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     base = _base_api_url()
     if not base:
         return {'success': False, 'error': 'ADAPTER_API_URL is not configured'}
@@ -362,9 +432,13 @@ def _post_workflow_to_external_api(workflow_id: str, workflow_body: Dict[str, An
     OSC_WORKFLOW_PREFIX = 'osc-is-workflow-'
     prefixed_id = workflow_id if workflow_id.startswith(OSC_WORKFLOW_PREFIX) else f"{OSC_WORKFLOW_PREFIX}{workflow_id}"
 
+    ledger_route = route or {
+        'groupname': DEFAULT_GROUP_NAME,
+        'apiuserid': DEFAULT_API_USER_ID,
+    }
     form_payload = {
-        'groupname': GROUPNAME,
-        'apiuserid': APIUSERID,
+        'groupname': ledger_route['groupname'],
+        'apiuserid': ledger_route['apiuserid'],
         'workflowid': prefixed_id,
         'workflowbody': json.dumps(workflow_body)
     }
@@ -429,8 +503,12 @@ def workflow_submit() -> Any:
     if not isinstance(data.get('description'), str) or not data.get('description', '').strip():
         return jsonify({'success': False, 'error': 'Missing description'}), 400
 
+    route, route_error = _resolve_ledger_route(payload, require_schema=False)
+    if route_error:
+        return jsonify({'success': False, 'error': route_error}), 400
+
     workflow_body = _build_workflow_body(data, workflow_id)
-    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='submit')
+    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='submit', route=route)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
 
@@ -444,8 +522,12 @@ def workflow_update() -> Any:
     if not workflow_id:
         return jsonify({'success': False, 'error': 'Missing workflowId'}), 400
 
+    route, route_error = _resolve_ledger_route(payload, require_schema=False)
+    if route_error:
+        return jsonify({'success': False, 'error': route_error}), 400
+
     workflow_body = _build_workflow_body(patch, workflow_id)
-    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='update')
+    result = _post_workflow_to_external_api(workflow_id, workflow_body, operation='update', route=route)
     status_code = 200 if result.get('success') else 502
     return jsonify(result), status_code
 
