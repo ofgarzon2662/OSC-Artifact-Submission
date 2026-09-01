@@ -1,196 +1,173 @@
-import fs from 'fs';
-import path from 'path';
-import * as grpc from '@grpc/grpc-js';
-import { connect, signers, Contract, Network, Gateway } from '@hyperledger/fabric-gateway';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createPrivateKey } from 'node:crypto';
+import * as grpc from '@grpc/grpc-js';
+import {
+  connect,
+  Contract,
+  Gateway,
+  Network,
+  signers
+} from '@hyperledger/fabric-gateway';
 
-type ConnectArgs = {
-  walletPath: string;
-  identityLabel: string;
+export type FabricConnectionArgs = {
+  certificatePath: string;
+  privateKeyPath: string;
   mspId: string;
   channelName: string;
   chaincodeName: string;
   peerEndpoint: string;
-  tlsCertPath: string; // optional if using insecure
-  identityFilePath?: string; // optional direct path to identity file
-  sslOverride?: string; // optional TLS server name override (SNI)
-  discoveryEnabled?: boolean; // retained for compatibility (not used by gateway connect)
-  discoveryAsLocalhost?: boolean; // retained for compatibility (not used by gateway connect)
+  tlsCertPath: string;
+  tlsServerName: string;
 };
 
-export async function connectGateway(args: ConnectArgs) {
-  // Load identity from wallet-like JSON file(s)
-  const candidates: string[] = [];
-  if (args.identityFilePath) candidates.push(args.identityFilePath);
-  candidates.push(path.join(args.walletPath, args.mspId, `${args.identityLabel}.id`));
-  candidates.push(path.join(args.walletPath, `${args.identityLabel}.id`));
+export type FabricConnection = {
+  gateway: Gateway;
+  network: Network;
+  contract: Contract;
+  close: () => void;
+};
 
-  let certificatePem = '';
-  let privateKeyPem = '';
-  for (const p of candidates) {
-    try {
-      if (!fs.existsSync(p)) continue;
-      const raw = fs.readFileSync(p, 'utf8');
-      try {
-        const j = JSON.parse(raw);
-        certificatePem = j.certificate || j.cert || (j.credentials && (j.credentials.certificate || j.credentials.cert)) || '';
-        privateKeyPem = j.privateKey || j.key || (j.credentials && (j.credentials.privateKey || j.credentials.key)) || '';
-      } catch {
-        const certMatch = raw.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
-        const keyMatch = raw.match(/-----BEGIN (?:PRIVATE KEY|EC PRIVATE KEY)-----[\s\S]*?-----END (?:PRIVATE KEY|EC PRIVATE KEY)-----/);
-        certificatePem = certMatch ? certMatch[0] : '';
-        privateKeyPem = keyMatch ? keyMatch[0] : '';
-      }
-      if (certificatePem && privateKeyPem) break;
-    } catch {}
-  }
-  if (!certificatePem || !privateKeyPem) {
-    throw new Error(`Identity '${args.identityLabel}' not found or invalid in ${args.walletPath}`);
-  }
+export type ProvenanceAssetType = 'artifact' | 'workflow';
+export type ProvenanceAction = 'create' | 'update';
 
-  // Build TLS gRPC client
-  let creds: grpc.ChannelCredentials;
-  if (args.tlsCertPath) {
-    const tlsCert = fs.readFileSync(path.resolve(args.tlsCertPath));
-    creds = grpc.credentials.createSsl(tlsCert);
-  } else {
-    creds = grpc.credentials.createInsecure();
-  }
-  const channelOptions: Record<string, any> = {};
-  if (args.sslOverride) {
-    channelOptions['grpc.ssl_target_name_override'] = args.sslOverride;
-    channelOptions['grpc.default_authority'] = args.sslOverride;
-  }
-  // Increase gRPC message size limits for large history payloads
-  try {
-    const maxRecv = parseInt(process.env.GRPC_MAX_RECV_BYTES || '', 10);
-    const maxSend = parseInt(process.env.GRPC_MAX_SEND_BYTES || '', 10);
-    if (!Number.isNaN(maxRecv) && maxRecv > 0) {
-      channelOptions['grpc.max_receive_message_length'] = maxRecv;
-    } else {
-      // Default to 64 MiB if not provided
-      channelOptions['grpc.max_receive_message_length'] = 64 * 1024 * 1024;
-    }
-    if (!Number.isNaN(maxSend) && maxSend > 0) {
-      channelOptions['grpc.max_send_message_length'] = maxSend;
-    } else {
-      // Default to 16 MiB if not provided
-      channelOptions['grpc.max_send_message_length'] = 16 * 1024 * 1024;
-    }
-  } catch {}
-  const client = new (grpc as any).Client(args.peerEndpoint, creds, channelOptions);
+const contractFunctions: Record<
+  ProvenanceAssetType,
+  Record<ProvenanceAction, string>
+> = {
+  artifact: { create: 'CreateArtifact', update: 'UpdateArtifact' },
+  workflow: { create: 'CreateWorkflow', update: 'UpdateWorkflow' }
+};
 
-  // Gateway identity and signer
-  const identity = { mspId: args.mspId, credentials: Buffer.from(certificatePem) };
-  const privateKey = createPrivateKey(privateKeyPem);
-  const signer = signers.newPrivateKeySigner(privateKey);
+const historyFunctions: Record<ProvenanceAssetType, string> = {
+  artifact: 'GetArtifactHistory',
+  workflow: 'GetWorkflowHistory'
+};
 
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readRequiredFile(filePath: string, description: string): Buffer {
+  if (!filePath.trim()) {
+    throw new Error(`${description} path is required`);
+  }
+  const value = fs.readFileSync(path.resolve(filePath));
+  if (value.length === 0) {
+    throw new Error(`${description} is empty`);
+  }
+  return value;
+}
+
+export async function connectGateway(
+  args: FabricConnectionArgs
+): Promise<FabricConnection> {
+  if (!args.peerEndpoint.trim()) throw new Error('Fabric peer endpoint is required');
+  if (!args.tlsServerName.trim()) throw new Error('Fabric TLS server name is required');
+
+  const certificate = readRequiredFile(args.certificatePath, 'Fabric certificate');
+  const privateKeyPem = readRequiredFile(args.privateKeyPath, 'Fabric private key');
+  const tlsRootCertificate = readRequiredFile(
+    args.tlsCertPath,
+    'Fabric peer TLS root certificate'
+  );
+
+  const channelOptions: grpc.ChannelOptions = {
+    'grpc.ssl_target_name_override': args.tlsServerName,
+    'grpc.default_authority': args.tlsServerName,
+    'grpc.max_receive_message_length': positiveInteger(
+      process.env.GRPC_MAX_RECV_BYTES,
+      64 * 1024 * 1024
+    ),
+    'grpc.max_send_message_length': positiveInteger(
+      process.env.GRPC_MAX_SEND_BYTES,
+      16 * 1024 * 1024
+    )
+  };
+  const client = new grpc.Client(
+    args.peerEndpoint,
+    grpc.credentials.createSsl(tlsRootCertificate),
+    channelOptions
+  );
+
+  const identity = { mspId: args.mspId, credentials: certificate };
+  const signer = signers.newPrivateKeySigner(createPrivateKey(privateKeyPem));
   const gateway = connect({
-    client: client as any,
+    client,
     identity,
     signer,
-    // Make deadlines configurable via env; increase evaluate for large histories
     evaluateOptions: () => ({
-      deadline: Date.now() + parseInt(process.env.EVALUATE_DEADLINE_MS || '60000', 10)
+      deadline: Date.now() + positiveInteger(process.env.EVALUATE_DEADLINE_MS, 60_000)
     }),
     endorseOptions: () => ({
-      deadline: Date.now() + parseInt(process.env.ENDORSE_DEADLINE_MS || '15000', 10)
+      deadline: Date.now() + positiveInteger(process.env.ENDORSE_DEADLINE_MS, 15_000)
     }),
     submitOptions: () => ({
-      deadline: Date.now() + parseInt(process.env.SUBMIT_DEADLINE_MS || '5000', 10)
+      deadline: Date.now() + positiveInteger(process.env.SUBMIT_DEADLINE_MS, 5_000)
     }),
     commitStatusOptions: () => ({
-      deadline: Date.now() + parseInt(process.env.COMMIT_STATUS_DEADLINE_MS || '60000', 10)
+      deadline:
+        Date.now() + positiveInteger(process.env.COMMIT_STATUS_DEADLINE_MS, 60_000)
     })
   });
 
-  const network: Network = gateway.getNetwork(args.channelName) as any;
-  const contract: Contract = network.getContract(args.chaincodeName) as any;
-
+  const network = gateway.getNetwork(args.channelName);
+  const contract = network.getContract(args.chaincodeName, 'ProvenanceContract');
   return {
     gateway,
     network,
     contract,
-    chaincodeName: args.chaincodeName,
-    close: () => gateway.close()
+    close: () => {
+      gateway.close();
+      client.close();
+    }
   };
 }
 
-type SubmitOptions = {
-  submitFn?: string;
-  updateFn?: string;
-  submitArgsMode?: 'id+data' | 'json' | 'data-only';
-  updateArgsMode?: 'id+patch' | 'json';
-  endorsingOrgs?: string[]; // retained; gateway may ignore if not supported in this client
-};
-
-export async function submitTxIfReal(
-  conn: any,
-  action: 'submit' | 'update',
-  payload: any,
-  options?: SubmitOptions
-) {
-  const now = new Date().toISOString();
-  const submitFn = options?.submitFn || 'SubmitArtifact';
-  const updateFn = options?.updateFn || 'UpdateArtifact';
-  const submitArgsMode = options?.submitArgsMode || 'id+data';
-  const updateArgsMode = options?.updateArgsMode || 'id+patch';
-
-  let fn = '';
-  let args: string[] = [];
-  if (action === 'submit') {
-    fn = submitFn;
-    if (submitArgsMode === 'json') {
-      args = [JSON.stringify({ artifactId: payload.artifactId, data: payload.data })];
-    } else if (submitArgsMode === 'data-only') {
-      // Inject id field expected by chaincode CreateArtifact
-      const merged = { ...(payload.data || {}), id: payload.artifactId };
-      args = [JSON.stringify(merged)];
-    } else {
-      args = [payload.artifactId, JSON.stringify(payload.data)];
-    }
-  } else {
-    fn = updateFn;
-    if (updateArgsMode === 'json') {
-      args = [JSON.stringify({ artifactId: payload.artifactId, patch: payload.patch || {} })];
-    } else {
-      args = [payload.artifactId, JSON.stringify(payload.patch || {})];
-    }
+export async function submitProvenanceTransaction(
+  connection: FabricConnection,
+  assetType: ProvenanceAssetType,
+  action: ProvenanceAction,
+  assetId: string,
+  payload: Record<string, unknown>,
+  requestMetadata: Record<string, unknown>
+): Promise<{ txId: string; committedAt: string; result: unknown }> {
+  const functionName = contractFunctions[assetType][action];
+  const proposal = connection.contract.newProposal(functionName, {
+    arguments: [assetId, JSON.stringify(payload), JSON.stringify(requestMetadata)]
+  });
+  const transactionId = proposal.getTransactionId();
+  const endorsed = await proposal.endorse();
+  const submitted = await endorsed.submit();
+  const status = await submitted.getStatus();
+  if (!status.successful) {
+    throw new Error(
+      `Fabric transaction ${status.transactionId} committed with status ${status.code}`
+    );
   }
-
-  // Build, endorse, and submit using Fabric Gateway
+  const resultText = Buffer.from(endorsed.getResult()).toString('utf8');
+  let result: unknown = resultText;
   try {
-    const proposal = (conn.contract as any).newProposal(fn, { arguments: args });
-    const endorsed = await (proposal as any).endorse();
-    const txId = (endorsed as any).transactionId as string;
-    const commit = await (endorsed as any).submit();
-    const status = await (commit as any).getStatus();
-    if (status && typeof status.code === 'number' && status.code !== 0) {
-      throw new Error(`Commit failed with status code ${status.code}`);
-    }
-    return { txId, committedAt: now };
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    throw new Error(`Fabric submit failed for ${fn}: ${msg}`);
+    result = JSON.parse(resultText);
+  } catch {
+    // Chaincode may intentionally return a non-JSON scalar.
   }
+  return {
+    txId: transactionId,
+    committedAt: new Date().toISOString(),
+    result
+  };
 }
 
 export async function evaluateHistory(
-  conn: any,
-  fnName: string,
-  artifactId: string
-) {
-  try {
-    // For evaluate, do not endorse; evaluate directly from proposal
-    const proposal = (conn.contract as any).newProposal(fnName, { arguments: [artifactId] });
-    const result = await (proposal as any).evaluate();
-    // result is a Uint8Array/Buffer containing JSON
-    const json = Buffer.from(result).toString('utf8');
-    return json;
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    throw new Error(`Fabric evaluate failed for ${fnName}: ${msg}`);
-  }
+  connection: FabricConnection,
+  assetType: ProvenanceAssetType,
+  assetId: string
+): Promise<unknown> {
+  const result = await connection.contract.evaluateTransaction(
+    historyFunctions[assetType],
+    assetId
+  );
+  return JSON.parse(Buffer.from(result).toString('utf8'));
 }
-
-
