@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requireme
 COPY app.py .
 COPY peer_client.py .
 
-# Expose port for health checks
+USER 10001:10001
 EXPOSE 8000
 
 CMD ["python", "app.py"]

@@ -16,4 +16,6 @@ COPY contracts/artifact.updated.v1.schema.json /app/schema/
 # Copy application code
 COPY app.py .
 
+USER 10001:10001
+EXPOSE 8000
 CMD ["python", "app.py"]

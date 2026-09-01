@@ -1,113 +1,63 @@
 # Messaging Topology
 
-The concrete RabbitMQ layout used by the OSC-IS submission pipeline. The topology is declared in [`broker/definitions.json`](../broker/definitions.json) and baked into the broker image, so it is recreated deterministically on every broker start.
+OSC-IS uses RabbitMQ topic exchanges and durable queues to isolate the
+interactive API from Fabric latency. The executable local definition is
+[`broker/definitions.json`](../broker/definitions.json). The worker and listener
+also declare the same topology so Amazon MQ does not depend on loading a broker
+image definition.
 
----
-
-## Exchange
-
-| Name | Type | Durable | Purpose |
-|---|---|---|---|
-| `artifact.exchange` | `topic` | yes | Single exchange routing **all** artifact and workflow commands and events by routing key. |
-
-A topic exchange was chosen so that one exchange can fan submission *commands* to worker queues and *events* to listener queues purely by routing-key convention, with no code changes to add a new message type — only a new binding.
-
----
-
-## Queues
-
-All queues are durable.
-
-| Queue | Bound routing key | Consumed by |
-|---|---|---|
-| `artifact.submit.queue` | `artifact.submit` | submission_worker |
-| `artifact.update.queue` | `artifact.update` | submission_worker |
-| `artifact.submitted.queue` | `artifact.submitted` | submission_listener |
-| `artifact.updated.queue` | `artifact.updated` | submission_listener |
-| `artifact.created.queue` | `artifact.created` | (reserved) |
-| `workflow.submit.queue` | `workflow.submit` | submission_worker |
-| `workflow.update.queue` | `workflow.update` | submission_worker |
-| `workflow.submitted.queue` | `workflow.submitted` | submission_listener |
-| `workflow.updated.queue` | `workflow.updated` | submission_listener |
-
----
-
-## Bindings
+## Main flow
 
 ```mermaid
 flowchart LR
-    X{{artifact.exchange · topic}}
-
-    X -->|artifact.submit| ASQ[(artifact.submit.queue)]
-    X -->|artifact.update| AUQ[(artifact.update.queue)]
-    X -->|artifact.submitted| ASBQ[(artifact.submitted.queue)]
-    X -->|artifact.updated| AUDQ[(artifact.updated.queue)]
-    X -->|artifact.created| ACQ[(artifact.created.queue)]
-    X -->|workflow.submit| WSQ[(workflow.submit.queue)]
-    X -->|workflow.update| WUQ[(workflow.update.queue)]
-    X -->|workflow.submitted| WSBQ[(workflow.submitted.queue)]
-    X -->|workflow.updated| WUDQ[(workflow.updated.queue)]
-
-    ASQ --> WK[submission_worker]
-    AUQ --> WK
-    WSQ --> WK
-    WUQ --> WK
-
-    ASBQ --> LS[submission_listener]
-    AUDQ --> LS
-    WSBQ --> LS
-    WUDQ --> LS
+    G[API Gateway outbox] -->|artifact/workflow command| X{{artifact.exchange}}
+    X --> C[(durable command queue)]
+    C --> W[submission worker]
+    W --> L1[NSG Ledger Gateway]
+    W --> L2[Citizen Science Ledger Gateway]
+    L1 --> F[Fabric Gateway API]
+    L2 --> F
+    W -->|completion event| X
+    X --> E[(durable completion queue)]
+    E --> S[submission listener]
+    S --> G
 ```
 
-Producers and their routing keys:
+Commands use `artifact.submit`, `artifact.update`, `workflow.submit`, and
+`workflow.update`. Completion events use the corresponding `submitted` and
+`updated` routing keys.
 
-| Producer | Publishes routing keys |
-|---|---|
-| **API Gateway** | `artifact.submit`, `artifact.update`, `workflow.submit`, `workflow.update` |
-| **Submission Worker** | `artifact.submitted`, `artifact.updated`, `workflow.submitted`, `workflow.updated` |
+## Delivery contract
 
----
+- Producers publish persistent messages and wait for publisher confirms.
+- Consumers use explicit acknowledgements with a prefetch of one.
+- A command is acknowledged only after a confirmed completion event is
+  published, or after a permanent validation failure is reported.
+- HTTP timeouts, connection failures, HTTP 408/425/429, and HTTP 5xx responses
+  are transient.
+- Validation errors and other non-retryable HTTP 4xx responses are permanent.
+- Fabric correlation receipts make redelivered ledger commands idempotent.
+- API status reconciliation is idempotent by entity ID.
 
-## Message lifecycle
+## Bounded retry
 
-```mermaid
-sequenceDiagram
-    participant GW as API Gateway
-    participant X as artifact.exchange
-    participant W as Submission Worker
-    participant A as Adapter → OSC-API
-    participant L as Submission Listener
+Hot `requeue=true` loops are not used. A transient failure rejects the message
+to a dead-letter exchange:
 
-    GW->>X: publish (rk=artifact.submit)
-    X->>W: deliver artifact.submit.queue
-    W->>A: POST /submit
-    A-->>W: { success, txId }
-    alt success
-        W->>X: publish (rk=artifact.submitted)
-        W-->>X: ack original
-        X->>L: deliver artifact.submitted.queue
-        L->>GW: PATCH status=SUCCESS
-    else failure
-        W-->>X: nack (requeue) or reject (poison)
-    end
+```text
+main queue -> retry exchange -> TTL retry queue -> artifact.exchange -> main queue
 ```
 
----
+The default delay is five seconds and the default maximum is four delivery
+attempts. RabbitMQ `x-death` metadata is the retry counter. The worker emits a
+terminal `FAILED` completion after exhaustion. The listener parks an exhausted
+or permanently invalid completion in `osc.status.failed.queue` for operator
+inspection.
 
-## Delivery semantics
+## AWS profile
 
-- **Acknowledgement:** the worker acknowledges a command only after the downstream call resolves. A transient failure results in `nack`/requeue; a structurally invalid ("poison") message is rejected without requeue.
-- **Durability:** durable exchange + durable queues mean in-flight messages survive a broker restart.
-- **At-least-once:** consumers must tolerate redelivery. Status reconciliation at the Gateway is idempotent (keyed by entity id), so duplicate `submitted`/`updated` events converge to the same state.
-- **Ordering:** not guaranteed across the exchange; the pipeline does not depend on cross-message ordering, only on per-entity convergence.
-
----
-
-## Operational notes
-
-- The full topology is defined in `broker/definitions.json` and applied at broker start. If bindings appear missing at runtime (commonly the `workflow.*` bindings after running a stale broker image), rebuild the broker image so current definitions are baked in:
-  ```bash
-  docker build --no-cache ./broker
-  ```
-- RabbitMQ management UI is exposed on `:15672` for inspecting exchanges, queues, bindings, and message counts.
-- Credentials come from `RABBITMQ_USER` / `RABBITMQ_PASS`; `rabbitmqctl` works without auth on-box, while `rabbitmqadmin` requires `-u/-p`.
+Amazon MQ connections must use AMQPS with certificate and server-name
+verification. The evidence environment uses a private single-instance broker to
+control cost. A production design should use a multi-AZ broker and quorum queues;
+that availability profile is documented but is not claimed as tested by this
+experiment.
