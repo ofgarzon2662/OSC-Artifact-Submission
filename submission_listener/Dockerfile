@@ -6,12 +6,12 @@ WORKDIR /app
 COPY requirements.lock .
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock
 
-# Create directory for the schema
-RUN mkdir -p /app/schema
+# Create the runtime contract directory expected by app.py.
+RUN mkdir -p /app/contracts
 
 # Copy the schema file (now from local contracts folder)
-COPY contracts/artifact.submitted.v1.schema.json /app/schema/
-COPY contracts/artifact.updated.v1.schema.json /app/schema/
+COPY contracts/artifact.submitted.v1.schema.json /app/contracts/
+COPY contracts/artifact.updated.v1.schema.json /app/contracts/
 
 # Copy application code
 COPY app.py .
