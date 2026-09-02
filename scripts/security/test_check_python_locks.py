@@ -40,6 +40,35 @@ class PythonLockTests(unittest.TestCase):
             root = self.fixture(Path(directory), "demo-pkg==1.2.3\n")
             self.assertTrue(CHECKER.check_component(root))
 
+    def test_hashed_runtime_lock_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.fixture(
+                Path(directory),
+                "demo-pkg==1.2.3 \\\n"
+                "    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            )
+            (root / "requirements.runtime.txt").write_text(
+                "Demo_Pkg==1.2.3\n", encoding="utf-8"
+            )
+            (root / "requirements.runtime.lock").write_text(
+                "demo-pkg==1.2.3 \\\n"
+                "    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], CHECKER.check_component(root))
+
+    def test_missing_runtime_lock_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.fixture(
+                Path(directory),
+                "demo-pkg==1.2.3 \\\n"
+                "    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            )
+            (root / "requirements.runtime.txt").write_text(
+                "demo-pkg==1.2.3\n", encoding="utf-8"
+            )
+            self.assertTrue(CHECKER.check_component(root))
+
 
 if __name__ == "__main__":
     unittest.main()

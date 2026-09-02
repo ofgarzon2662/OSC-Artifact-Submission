@@ -86,6 +86,24 @@ def check_component(component: Path) -> list[str]:
                 findings.append(
                     f"{component}: {name}=={version} is not represented exactly in {lock_path.name}"
                 )
+    runtime_direct_path = component / "requirements.runtime.txt"
+    runtime_lock_path = component / "requirements.runtime.lock"
+    if runtime_direct_path.exists() != runtime_lock_path.exists():
+        findings.append(
+            f"{component}: requirements.runtime.txt and requirements.runtime.lock must be added together"
+        )
+    elif runtime_direct_path.exists():
+        try:
+            runtime_direct = parse_direct(runtime_direct_path)
+            runtime_locked = parse_lock(runtime_lock_path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            findings.append(str(exc))
+        else:
+            for name, version in runtime_direct.items():
+                if runtime_locked.get(name) != version:
+                    findings.append(
+                        f"{component}: {name}=={version} is not represented exactly in requirements.runtime.lock"
+                    )
     return findings
 
 
