@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /adapter
+    schedule: { interval: weekly }
+    cooldown: &release-cooldown
+      default-days: 5
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 5
+  - package-ecosystem: pip
+    directory: /submission_listener
+    schedule: { interval: weekly }
+    cooldown: *release-cooldown
+  - package-ecosystem: pip
+    directory: /submission_worker
+    schedule: { interval: weekly }
+    cooldown: *release-cooldown
+  - package-ecosystem: pip
+    directory: /get_history_worker
+    schedule: { interval: weekly }
+    cooldown: *release-cooldown
+  - package-ecosystem: npm
+    directory: /fabric-bridge
+    schedule: { interval: weekly }
+    cooldown: *release-cooldown
+    groups:
+      npm-development:
+        dependency-type: development
+        exclude-patterns: [pkcs11js, protobufjs, fsevents]
+      npm-production:
+        dependency-type: production
+        exclude-patterns: [pkcs11js, protobufjs, fsevents]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    cooldown:
+      default-days: 5
+  - package-ecosystem: docker
+    directories:
+      - /adapter
+      - /broker
+      - /fabric-bridge
+      - /get_history_worker
+      - /mock-osc-api
+      - /submission_listener
+      - /submission_worker
+    schedule: { interval: weekly }
+    cooldown:
+      default-days: 5

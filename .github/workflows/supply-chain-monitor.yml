@@ -1,0 +1,25 @@
+name: Supply-chain monitor
+
+on:
+  schedule:
+    - cron: '7 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect npm malware indicators
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Scan bridge repository and lockfile without installing dependencies
+        run: >-
+          python3 fabric-bridge/scripts/security/check_npm_supply_chain.py
+          --repo .
+          --lock fabric-bridge/package-lock.json
+          --blocklist fabric-bridge/security/npm-malware-blocklist.csv
+          --policy fabric-bridge/security/npm-lifecycle-allowlist.json
+          --skip-installed

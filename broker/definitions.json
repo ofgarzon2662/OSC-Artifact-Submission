@@ -1,7 +1,35 @@
 {
+  "vhosts": [{ "name": "/" }],
   "exchanges": [
     {
       "name": "artifact.exchange",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "osc.retry.exchange",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "osc.listener.retry.exchange",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "osc.failed.exchange",
       "vhost": "/",
       "type": "topic",
       "durable": true,
@@ -12,28 +40,175 @@
   ],
   "queues": [
     {
-      "name": "artifact.submitted.queue",
-      "vhost": "/",
-      "durable": true,
-      "auto_delete": false,
-      "arguments": {}
-    },
-    {
       "name": "artifact.submit.queue",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
-      "arguments": {}
+      "arguments": {
+        "x-dead-letter-exchange": "osc.retry.exchange",
+        "x-dead-letter-routing-key": "artifact.submit.retry"
+      }
     },
     {
       "name": "artifact.update.queue",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
-      "arguments": {}
+      "arguments": {
+        "x-dead-letter-exchange": "osc.retry.exchange",
+        "x-dead-letter-routing-key": "artifact.update.retry"
+      }
+    },
+    {
+      "name": "workflow.submit.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.retry.exchange",
+        "x-dead-letter-routing-key": "workflow.submit.retry"
+      }
+    },
+    {
+      "name": "workflow.update.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.retry.exchange",
+        "x-dead-letter-routing-key": "workflow.update.retry"
+      }
+    },
+    {
+      "name": "artifact.submit.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "artifact.submit"
+      }
+    },
+    {
+      "name": "artifact.update.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "artifact.update"
+      }
+    },
+    {
+      "name": "workflow.submit.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "workflow.submit"
+      }
+    },
+    {
+      "name": "workflow.update.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "workflow.update"
+      }
+    },
+    {
+      "name": "artifact.submitted.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.listener.retry.exchange",
+        "x-dead-letter-routing-key": "artifact.submitted.retry"
+      }
     },
     {
       "name": "artifact.updated.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.listener.retry.exchange",
+        "x-dead-letter-routing-key": "artifact.updated.retry"
+      }
+    },
+    {
+      "name": "workflow.submitted.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.listener.retry.exchange",
+        "x-dead-letter-routing-key": "workflow.submitted.retry"
+      }
+    },
+    {
+      "name": "workflow.updated.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "osc.listener.retry.exchange",
+        "x-dead-letter-routing-key": "workflow.updated.retry"
+      }
+    },
+    {
+      "name": "artifact.submitted.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "artifact.submitted"
+      }
+    },
+    {
+      "name": "artifact.updated.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "artifact.updated"
+      }
+    },
+    {
+      "name": "workflow.submitted.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "workflow.submitted"
+      }
+    },
+    {
+      "name": "workflow.updated.queue.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "artifact.exchange",
+        "x-dead-letter-routing-key": "workflow.updated"
+      }
+    },
+    {
+      "name": "osc.status.failed.queue",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
@@ -41,37 +216,22 @@
     }
   ],
   "bindings": [
-    {
-      "source": "artifact.exchange",
-      "vhost": "/",
-      "destination": "artifact.submitted.queue",
-      "destination_type": "queue",
-      "routing_key": "artifact.submitted",
-      "arguments": {}
-    },
-    {
-      "source": "artifact.exchange",
-      "vhost": "/",
-      "destination": "artifact.submit.queue",
-      "destination_type": "queue",
-      "routing_key": "artifact.submit",
-      "arguments": {}
-    },
-    {
-      "source": "artifact.exchange",
-      "vhost": "/",
-      "destination": "artifact.update.queue",
-      "destination_type": "queue",
-      "routing_key": "artifact.update",
-      "arguments": {}
-    },
-    {
-      "source": "artifact.exchange",
-      "vhost": "/",
-      "destination": "artifact.updated.queue",
-      "destination_type": "queue",
-      "routing_key": "artifact.updated",
-      "arguments": {}
-    }
+    { "source": "artifact.exchange", "vhost": "/", "destination": "artifact.submit.queue", "destination_type": "queue", "routing_key": "artifact.submit", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "artifact.update.queue", "destination_type": "queue", "routing_key": "artifact.update", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "workflow.submit.queue", "destination_type": "queue", "routing_key": "workflow.submit", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "workflow.update.queue", "destination_type": "queue", "routing_key": "workflow.update", "arguments": {} },
+    { "source": "osc.retry.exchange", "vhost": "/", "destination": "artifact.submit.queue.retry", "destination_type": "queue", "routing_key": "artifact.submit.retry", "arguments": {} },
+    { "source": "osc.retry.exchange", "vhost": "/", "destination": "artifact.update.queue.retry", "destination_type": "queue", "routing_key": "artifact.update.retry", "arguments": {} },
+    { "source": "osc.retry.exchange", "vhost": "/", "destination": "workflow.submit.queue.retry", "destination_type": "queue", "routing_key": "workflow.submit.retry", "arguments": {} },
+    { "source": "osc.retry.exchange", "vhost": "/", "destination": "workflow.update.queue.retry", "destination_type": "queue", "routing_key": "workflow.update.retry", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "artifact.submitted.queue", "destination_type": "queue", "routing_key": "artifact.submitted", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "artifact.updated.queue", "destination_type": "queue", "routing_key": "artifact.updated", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "workflow.submitted.queue", "destination_type": "queue", "routing_key": "workflow.submitted", "arguments": {} },
+    { "source": "artifact.exchange", "vhost": "/", "destination": "workflow.updated.queue", "destination_type": "queue", "routing_key": "workflow.updated", "arguments": {} },
+    { "source": "osc.listener.retry.exchange", "vhost": "/", "destination": "artifact.submitted.queue.retry", "destination_type": "queue", "routing_key": "artifact.submitted.retry", "arguments": {} },
+    { "source": "osc.listener.retry.exchange", "vhost": "/", "destination": "artifact.updated.queue.retry", "destination_type": "queue", "routing_key": "artifact.updated.retry", "arguments": {} },
+    { "source": "osc.listener.retry.exchange", "vhost": "/", "destination": "workflow.submitted.queue.retry", "destination_type": "queue", "routing_key": "workflow.submitted.retry", "arguments": {} },
+    { "source": "osc.listener.retry.exchange", "vhost": "/", "destination": "workflow.updated.queue.retry", "destination_type": "queue", "routing_key": "workflow.updated.retry", "arguments": {} },
+    { "source": "osc.failed.exchange", "vhost": "/", "destination": "osc.status.failed.queue", "destination_type": "queue", "routing_key": "status.failed", "arguments": {} }
   ]
-} 
+}

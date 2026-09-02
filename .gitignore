@@ -18,8 +18,23 @@ submission_worker/__pycache__
 fabric-bridge/src/wallets
 fabric-bridge/node_modules
 fabric-bridge/dist
+fabric-bridge/coverage
 fabric-bridge/.env
 fabric-bridge/wallets
 fabric-bridge/peer0-org1-ca-crt
 fabric-bridge/peer0-org2-ca-crt
 fabric-bridge/peers-bundle.crt
+get_history_worker/ghw-task-def.json
+adapter/venv/
+adapter/.coverage
+adapter/htmlcov/
+adapter/.pytest_cache/
+adapter/__pycache__/
+get_history_worker/venv/
+get_history_worker/.coverage
+get_history_worker/htmlcov/
+get_history_worker/.pytest_cache/
+get_history_worker/__pycache__/
+# Python security tooling
+__pycache__/
+*.py[cod]

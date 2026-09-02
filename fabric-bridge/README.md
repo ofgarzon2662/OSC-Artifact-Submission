@@ -1,38 +1,63 @@
-# fabric-bridge (MVP)
+# OSC Ledger Gateway
 
-A TypeScript microservice that will bridge to Hyperledger Fabric via the
-Fabric Gateway SDK. This MVP stubs the Fabric calls to allow the rest of the
-system to integrate and evolve.
+The directory name is retained for repository compatibility, but this service is
+now a dedicated **Ledger Gateway**. One deployment is bound to one OSC
+organization and one Fabric service identity. It is not the legacy OSC-API
+compatibility adapter.
 
-## Endpoints
+## Trust boundary
 
-- GET `/health`
-- POST `/submit` with body `{ artifactId: uuid, data: object, correlationId? }`
-- POST `/update` with body `{ artifactId: uuid, patch: object, correlationId? }`
+- Supported identities are `NSGMSP` / `nsg` and
+  `CitizenScienceMSP` / `citizen-science`.
+- A deployment accepts commands only for its configured organization.
+- Calls require `Authorization: Bearer <LEDGER_GATEWAY_TOKEN>`.
+- Fabric uses the Gateway API over gRPC TLS. Insecure gRPC is not available.
+- Certificates and private keys are mounted files. They are never downloaded by
+  the image and never returned by `/health`.
+- Portal authentication and roles remain in the API Gateway. Chaincode receives
+  authenticated user, active organization, operation, request time, and
+  correlation metadata for audit attribution.
 
-## Run
+## API
 
+All command bodies use `contractVersion: "v3"`, an `organization` object, a
+top-level `correlationId`, and matching `request` metadata.
+
+| Endpoint | Chaincode transaction |
+|---|---|
+| `POST /submit` | `ProvenanceContract:CreateArtifact` |
+| `POST /update` | `ProvenanceContract:UpdateArtifact` |
+| `POST /workflow/submit` | `ProvenanceContract:CreateWorkflow` |
+| `POST /workflow/update` | `ProvenanceContract:UpdateWorkflow` |
+| `GET /history/:id` | `ProvenanceContract:GetArtifactHistory` |
+| `GET /workflow/history/:id` | `ProvenanceContract:GetWorkflowHistory` |
+| `GET /health` | Sanitized liveness/configuration status |
+
+## Required configuration
+
+```text
+MSP_ID
+ORGANIZATION_ID
+LEDGER_GATEWAY_TOKEN
+PEER_ENDPOINT
+TLS_SERVER_NAME
+TLS_CERT_PATH
+CERTIFICATE_PATH
+PRIVATE_KEY_PATH
+FABRIC_CHANNEL
+FABRIC_CHAINCODE
 ```
-cd fabric-bridge
-npm i
-npm run dev
-```
 
-Environment (defaults in code):
-- PORT (default 4000)
-- FABRIC_CHANNEL, FABRIC_CHAINCODE
-- FABRIC_PEER (e.g. localhost:7051)
-- WALLET_PATH (filesystem wallet path)
-- MSP_ID, IDENTITY_LABEL
+`FABRIC_REAL_MODE=false` is for deterministic local contract tests only. The
+container defaults to real Fabric mode and fails startup when its identity or
+TLS configuration is incomplete.
 
-## Build
+## Development
 
-```
+Use the repository secure-install wrapper rather than a direct npm install.
+
+```powershell
+.\scripts\secure-install.ps1
 npm run build
-npm start
+npm test
 ```
-
-## Next steps
-- Replace stub with real Fabric Gateway SDK connection (`FileSystemWallet`, `Gateway`, `Network/Contract`)
-- Add TLS connection profile and proper discovery
-- Add metrics and structured error mapping

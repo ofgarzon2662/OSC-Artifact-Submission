@@ -5,9 +5,6 @@ networks:
   osc-api-services-network:
     external: true
     name: osc-api-services-network
-  fabric-network:
-    external: true
-    name: fabric_test
 
 services:
   # RabbitMQ Message Broker with custom configuration
@@ -31,49 +28,25 @@ services:
       - osc-api-services-network
     restart: unless-stopped
 
-  # Fabric Bridge (TypeScript)
-  fabric-bridge:
+  # Adapter (Python) — bridges submission worker to OSC-API
+  adapter:
     build:
-      context: ./fabric-bridge
+      context: ./adapter
       dockerfile: Dockerfile
-    container_name: fabric-bridge
+    container_name: osc-adapter
     environment:
-      - PORT=4000
-      - FABRIC_PEER=${FABRIC_PEER:-localhost:7051}
-      - WALLET_PATH=/wallets
-      - MSP_ID=${MSP_ID:-Org1MSP}
-      - IDENTITY_LABEL=${IDENTITY_LABEL:-svc-org1}
-      - IDENTITY_FILE_PATH=/wallets/Org1MSP/svc-org1.id
-      - TLS_CERT_PATH=/tls/peer0-org1-ca.crt
-      - TLS_OVERRIDE_HOSTNAME=peer0.org1.example.com
-      - UPDATE_ARGS_MODE=id+patch  
-      - SUBMIT_FN=CreateArtifact
-      - UPDATE_FN=UpdateArtifactDetails
-      - SUBMIT_ARGS_MODE=data-only 
-      - PEER_ENDPOINT=peer0.org1.example.com:7051
-      - FABRIC_CHANNEL=mychannel
-      - FABRIC_CHAINCODE=oscis
-      - ENDORSING_ORGS=Org1MSP,Org2MSP
-      - EVALUATE_DEADLINE_MS=60000
-      - ENDORSE_DEADLINE_MS=30000
-      - SUBMIT_DEADLINE_MS=10000
-      - COMMIT_STATUS_DEADLINE_MS=60000
-      - GRPC_MAX_RECV_BYTES=${GRPC_MAX_RECV_BYTES:-67108864}
-      - GRPC_MAX_SEND_BYTES=${GRPC_MAX_SEND_BYTES:-16777216}
-
+      ADAPTER_API_URL: ${ADAPTER_API_URL}
+      ADAPTER_API_TOKEN: ${ADAPTER_API_TOKEN}
+      ADAPTER_REQUEST_TIMEOUT_SECONDS: ${ADAPTER_REQUEST_TIMEOUT_SECONDS:-30}
     ports:
-      - "4000:4000"
-    volumes:
-    - ../OSC-Network/wallets:/wallets:ro
-    - ../OSC-Network/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/tls/peer0-org1-ca.crt:ro
+      - "${ADAPTER_PORT:-5000}:5000"
     networks:
       - osc-api-services-network
-      - fabric-network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', (r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 15s
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
       start_period: 20s
     restart: unless-stopped
 
@@ -91,10 +64,10 @@ services:
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       RABBITMQ_QUEUE_SUBMIT: ${RABBITMQ_QUEUE_SUBMIT:-artifact.submit.queue}
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED:-artifact.submitted.queue}
-      
-      # Fabric Bridge Configuration
-      FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://fabric-bridge:4000}
-      
+
+      # Upstream service (adapter)
+      FABRIC_BRIDGE_URL: ${FABRIC_BRIDGE_URL:-http://adapter:5000}
+
       # Environment
       ENVIRONMENT: docker
     ports:
@@ -104,7 +77,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      fabric-bridge:
+      adapter:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
@@ -128,12 +101,13 @@ services:
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       RABBITMQ_QUEUE_SUBMITTED: ${RABBITMQ_QUEUE_SUBMITTED}
       RABBITMQ_QUEUE_UPDATED: ${RABBITMQ_QUEUE_UPDATED:-artifact.updated.queue}
-      
+
       # API Gateway Configuration
-      API_GATEWAY_URL: ${API_GATEWAY_URL}
+      API_GATEWAY_URL: ${API_GATEWAY_URL:-http://osc-api-gateway:3000/api/v1/artifacts}
+      API_GATEWAY_WORKFLOW_URL: ${API_GATEWAY_WORKFLOW_URL:-http://osc-api-gateway:3000/api/v1/workflows}
       SUBMISSION_LISTENER_API_KEY: ${SUBMISSION_LISTENER_API_KEY}
       SUBMISSION_LISTENER_SERVICE_ROLE: ${SUBMISSION_LISTENER_SERVICE_ROLE}
-      
+
       # Environment
       ENVIRONMENT: docker
     ports:
@@ -149,7 +123,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    restart: unless-stopped 
+    restart: unless-stopped
 
   # Get History Worker (FastAPI)
   get_history_worker:
@@ -158,7 +132,7 @@ services:
       dockerfile: Dockerfile
     container_name: osc-get-history-worker
     environment:
-      BRIDGE_URL: ${BRIDGE_URL}
+      BRIDGE_URL: ${BRIDGE_URL:-http://adapter:5000}
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
       CACHE_MAX_ARTIFACTS: ${CACHE_MAX_ARTIFACTS:-100}
       MAX_PAGE_SIZE: ${MAX_PAGE_SIZE:-500}
@@ -169,10 +143,10 @@ services:
     networks:
       - osc-api-services-network
     depends_on:
-      fabric-bridge:
+      adapter:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
