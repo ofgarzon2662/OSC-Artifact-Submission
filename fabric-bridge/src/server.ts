@@ -27,11 +27,15 @@ const PRIVATE_KEY_PATH = process.env.PRIVATE_KEY_PATH || '';
 const MSP_ID = process.env.MSP_ID || '';
 const ORGANIZATION_ID = process.env.ORGANIZATION_ID || '';
 const LEDGER_GATEWAY_TOKEN = process.env.LEDGER_GATEWAY_TOKEN || '';
+const NSG_ORGANIZATION_ID = process.env.NSG_ORGANIZATION_ID || 'nsg';
+const CITIZEN_SCIENCE_ORGANIZATION_ID =
+  process.env.CITIZEN_SCIENCE_ORGANIZATION_ID || 'citizen-science';
 
 const supportedOrganizations: Record<string, string> = {
-  NSGMSP: 'nsg',
-  CitizenScienceMSP: 'citizen-science'
+  NSGMSP: NSG_ORGANIZATION_ID,
+  CitizenScienceMSP: CITIZEN_SCIENCE_ORGANIZATION_ID
 };
+const supportedOrganizationIds = Object.values(supportedOrganizations);
 
 function validateConfiguration(): string[] {
   const errors: string[] = [];
@@ -60,7 +64,7 @@ const correlationId = Joi.string()
 const requestSchema = (operation: string) =>
   Joi.object({
     authenticatedUserId: Joi.string().trim().min(1).max(128).required(),
-    organizationId: Joi.string().valid('nsg', 'citizen-science').required(),
+    organizationId: Joi.string().valid(...supportedOrganizationIds).required(),
     correlationId,
     operation: Joi.string().valid(operation).required(),
     requestedAt: Joi.string().isoDate().required()
@@ -69,7 +73,7 @@ const requestSchema = (operation: string) =>
     .required();
 
 const organizationSchema = Joi.object({
-  id: Joi.string().valid('nsg', 'citizen-science').required(),
+  id: Joi.string().valid(...supportedOrganizationIds).required(),
   name: Joi.string().trim().min(1).max(200).required(),
   slug: Joi.string().trim().max(128).optional(),
   mspId: Joi.string().valid('NSGMSP', 'CitizenScienceMSP').required(),
