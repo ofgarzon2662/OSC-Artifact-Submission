@@ -1,4 +1,4 @@
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
+FROM node:24.20.0-alpine3.24@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
@@ -15,9 +15,14 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runtime
+FROM node:24.20.0-alpine3.24@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+
+RUN apk add --no-cache libcrypto3=3.5.8-r0 libssl3=3.5.8-r0 \
+    && rm -rf /usr/local/lib/node_modules/npm \
+      /usr/local/bin/npm \
+      /usr/local/bin/npx
 
 COPY package.json package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
