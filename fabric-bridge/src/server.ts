@@ -265,6 +265,31 @@ async function submit(
   }
 }
 
+function sendFabricFailure(
+  res: Response,
+  error: any,
+  requestCorrelationId?: string
+) {
+  const message = error?.message || String(error);
+  const detailMessages = Array.isArray(error?.details)
+    ? error.details.map((detail: any) => detail?.message || '').filter(Boolean)
+    : [];
+  const authorizationDenied = [message, ...detailMessages].some((value) =>
+    /(?:artifact|workflow) belongs to a different organization/i.test(value)
+  );
+
+  return res
+    .status(authorizationDenied ? StatusCodes.FORBIDDEN : StatusCodes.BAD_GATEWAY)
+    .json({
+      success: false,
+      retryable: !authorizationDenied,
+      ...(requestCorrelationId ? { correlationId: requestCorrelationId } : {}),
+      error: authorizationDenied
+        ? 'Fabric organization is not authorized for this ledger record'
+        : message
+    });
+}
+
 function commandHandler(
   assetType: ProvenanceAssetType,
   action: ProvenanceAction,
@@ -294,12 +319,7 @@ function commandHandler(
         ...result
       });
     } catch (error: any) {
-      return res.status(StatusCodes.BAD_GATEWAY).json({
-        success: false,
-        retryable: true,
-        correlationId: validation.value.correlationId,
-        error: error?.message || String(error)
-      });
+      return sendFabricFailure(res, error, validation.value.correlationId);
     }
   };
 }
@@ -320,11 +340,7 @@ function historyHandler(assetType: ProvenanceAssetType) {
         connection.close();
       }
     } catch (error: any) {
-      return res.status(StatusCodes.BAD_GATEWAY).json({
-        success: false,
-        retryable: true,
-        error: error?.message || String(error)
-      });
+      return sendFabricFailure(res, error);
     }
   };
 }

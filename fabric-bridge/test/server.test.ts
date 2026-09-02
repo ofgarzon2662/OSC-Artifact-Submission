@@ -349,4 +349,30 @@ describe('Fabric failure handling', () => {
       error: 'history peer unavailable'
     });
   });
+
+  it('maps a chaincode organization denial to a non-retryable 403', async () => {
+    jest.resetModules();
+    const close = jest.fn();
+    jest.doMock('../src/ts/fabricClient.ts', () => ({
+      connectGateway: jest.fn().mockResolvedValue({ close }),
+      evaluateHistory: jest
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            '2 UNKNOWN: chaincode response 500, artifact belongs to a different organization'
+          )
+        ),
+      submitProvenanceTransaction: jest.fn()
+    }));
+    const module = await import('../src/server');
+    const response = await authenticated(
+      request(module.app).get(`/history/${ARTIFACT_ID}`)
+    ).expect(403);
+    expect(response.body).toEqual({
+      success: false,
+      retryable: false,
+      error: 'Fabric organization is not authorized for this ledger record'
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 });
