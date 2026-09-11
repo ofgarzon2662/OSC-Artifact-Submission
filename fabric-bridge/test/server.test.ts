@@ -95,6 +95,11 @@ describe('organization-bound ledger gateway', () => {
       .set('Authorization', 'Bearer wrong-token')
       .send(artifactSubmit())
       .expect(401);
+    await request(app)
+      .post('/submit')
+      .set('Authorization', `Bearer ${TOKEN} trailing-data`)
+      .send(artifactSubmit())
+      .expect(401);
   });
 
   it('accepts a valid NSG artifact create command', async () => {
@@ -270,8 +275,9 @@ describe('Fabric failure handling', () => {
       success: false,
       retryable: true,
       correlationId: 'corr-001',
-      error: 'peer unavailable'
+      error: 'Fabric operation failed'
     });
+    expect(JSON.stringify(response.body)).not.toContain('peer unavailable');
     expect(JSON.stringify(response.body)).not.toContain(TOKEN);
   });
 
@@ -361,8 +367,9 @@ describe('Fabric failure handling', () => {
     expect(response.body).toMatchObject({
       success: false,
       retryable: true,
-      error: 'history peer unavailable'
+      error: 'Fabric operation failed'
     });
+    expect(JSON.stringify(response.body)).not.toContain('history peer unavailable');
   });
 
   it('maps a chaincode organization denial to a non-retryable 403', async () => {

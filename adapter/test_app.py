@@ -160,7 +160,10 @@ class TestUpdate(unittest.TestCase):
         )
         resp = self.client.post('/update', json=VALID_UPDATE_PAYLOAD)
         self.assertEqual(resp.status_code, 502)
-        self.assertFalse(resp.get_json()['success'])
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertEqual('External API error 500', data['error'])
+        self.assertNotIn('Internal Server Error', json.dumps(data))
 
     @patch('app.requests.post')
     def test_update_calls_update_endpoint(self, mock_post):
@@ -372,6 +375,8 @@ class TestPostToExternalApiUnconfigured(unittest.TestCase):
         try:
             result = _post_to_external_api('art-1', {'id': 'art-1', 'mandatory_public_fields': {}, 'public_fields': {}, 'private_fields': {}})
             self.assertFalse(result['success'])
+            self.assertEqual('External ledger operation failed', result['error'])
+            self.assertNotIn('endorsement failed', json.dumps(result))
         finally:
             adapter_app.API_URL = original_url
             adapter_app.API_TOKEN = original_token
@@ -389,7 +394,8 @@ class TestPostToExternalApiUnconfigured(unittest.TestCase):
         try:
             result = _post_to_external_api('art-1', {})
             self.assertFalse(result['success'])
-            self.assertIn('connection refused', result['error'])
+            self.assertEqual('External API request failed', result['error'])
+            self.assertNotIn('connection refused', result['error'])
         finally:
             adapter_app.API_URL = original_url
             adapter_app.API_TOKEN = original_token
@@ -419,7 +425,8 @@ class TestHistoryEndpointAdditional(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
         data = resp.get_json()
         self.assertFalse(data['success'])
-        self.assertIn('connection refused', data['error'])
+        self.assertEqual('OSC-API history request failed', data['error'])
+        self.assertNotIn('connection refused', data['error'])
 
     @patch('app.requests.get')
     def test_history_non_json_response_returns_text(self, mock_get):

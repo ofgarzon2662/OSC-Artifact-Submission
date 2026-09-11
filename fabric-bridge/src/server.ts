@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import express, { NextFunction, Request, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { StatusCodes } from 'http-status-codes';
@@ -168,8 +169,28 @@ const workflowUpdateSchema = Joi.object({
 }).unknown(false);
 
 function bearerToken(req: Request): string {
-  const match = /^Bearer\s+(.+)$/i.exec(req.header('authorization') || '');
-  return match?.[1] || '';
+  const authorization = req.header('authorization') || '';
+  if (authorization.length > 8192) return '';
+
+  const separator = authorization.indexOf(' ');
+  if (
+    separator <= 0 ||
+    authorization.slice(0, separator).toLowerCase() !== 'bearer'
+  ) {
+    return '';
+  }
+
+  const token = authorization.slice(separator + 1).trim();
+  if (
+    !token ||
+    token.includes(' ') ||
+    token.includes('\t') ||
+    token.includes('\r') ||
+    token.includes('\n')
+  ) {
+    return '';
+  }
+  return token;
 }
 
 function authorized(req: Request): boolean {
@@ -277,6 +298,10 @@ function sendFabricFailure(
   const authorizationDenied = [message, ...detailMessages].some((value) =>
     /(?:artifact|workflow) belongs to a different organization/i.test(value)
   );
+  console.error('Fabric operation failed', {
+    ...(requestCorrelationId ? { correlationId: requestCorrelationId } : {}),
+    error: message
+  });
 
   return res
     .status(authorizationDenied ? StatusCodes.FORBIDDEN : StatusCodes.BAD_GATEWAY)
@@ -286,7 +311,7 @@ function sendFabricFailure(
       ...(requestCorrelationId ? { correlationId: requestCorrelationId } : {}),
       error: authorizationDenied
         ? 'Fabric organization is not authorized for this ledger record'
-        : message
+        : 'Fabric operation failed'
     });
 }
 
@@ -360,6 +385,15 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
+app.use(
+  rateLimit({
+    windowMs: 60_000,
+    limit: 2_000,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { message: 'Too many requests' }
+  })
+);
 app.use(requireInternalAuthentication);
 app.post('/submit', commandHandler('artifact', 'create', artifactSubmitSchema));
 app.post('/update', commandHandler('artifact', 'update', artifactUpdateSchema));

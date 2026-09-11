@@ -251,18 +251,18 @@ def _post_to_external_api(
             except ValueError:
                 response_payload = response.text
             if isinstance(response_payload, dict) and response_payload.get('success') is False:
+                logger.error('External API reported a failed artifact operation')
                 return {
                     'success': False,
-                    'error': response_payload.get('error', 'External API reported failure'),
-                    'apiStatus': response.status_code,
-                    'apiResponse': response_payload
+                    'error': 'External API reported failure',
+                    'apiStatus': response.status_code
                 }
             if isinstance(response_payload, str) and 'peer command failed' in response_payload.lower():
+                logger.error('External ledger artifact operation failed')
                 return {
                     'success': False,
-                    'error': response_payload,
-                    'apiStatus': response.status_code,
-                    'apiResponse': response_payload
+                    'error': 'External ledger operation failed',
+                    'apiStatus': response.status_code
                 }
             return {
                 'success': True,
@@ -276,16 +276,15 @@ def _post_to_external_api(
         )
         return {
             'success': False,
-            'error': f'External API error {response.status_code}: {response.text}',
-            'apiStatus': response.status_code,
-            'apiResponse': response.text
+            'error': f'External API error {response.status_code}',
+            'apiStatus': response.status_code
         }
     except requests.exceptions.Timeout:
         logger.error('External API request timed out')
         return { 'success': False, 'error': 'External API request timed out' }
     except requests.exceptions.RequestException as exc:
         logger.error('External API request failed: %s', str(exc))
-        return { 'success': False, 'error': f'External API request failed: {str(exc)}' }
+        return { 'success': False, 'error': 'External API request failed' }
 
 
 @app.get('/health')
@@ -379,13 +378,13 @@ def get_history(artifact_id: str) -> Any:
                 return jsonify(normalized), 200
             return jsonify(data), 200
         logger.error('OSC-API history error %s: %s', response.status_code, response.text)
-        return jsonify({ 'success': False, 'error': f'OSC-API error {response.status_code}: {response.text}' }), 502
+        return jsonify({ 'success': False, 'error': f'OSC-API error {response.status_code}' }), 502
     except requests.exceptions.Timeout:
         logger.error('OSC-API history request timed out')
         return jsonify({ 'success': False, 'error': 'OSC-API history request timed out' }), 502
     except requests.exceptions.RequestException as exc:
         logger.error('OSC-API history request failed: %s', str(exc))
-        return jsonify({ 'success': False, 'error': f'OSC-API history request failed: {str(exc)}' }), 502
+        return jsonify({ 'success': False, 'error': 'OSC-API history request failed' }), 502
 
 
 ## ─── Workflow endpoints ───────────────────────────────────────────────────────
@@ -457,18 +456,18 @@ def _post_workflow_to_external_api(
             except ValueError:
                 response_payload = response.text
             if isinstance(response_payload, dict) and response_payload.get('success') is False:
+                logger.error('External API reported a failed workflow operation')
                 return {
                     'success': False,
-                    'error': response_payload.get('error', 'External API reported failure'),
-                    'apiStatus': response.status_code,
-                    'apiResponse': response_payload
+                    'error': 'External API reported failure',
+                    'apiStatus': response.status_code
                 }
             if isinstance(response_payload, str) and 'peer command failed' in response_payload.lower():
+                logger.error('External ledger workflow operation failed')
                 return {
                     'success': False,
-                    'error': response_payload,
-                    'apiStatus': response.status_code,
-                    'apiResponse': response_payload
+                    'error': 'External ledger operation failed',
+                    'apiStatus': response.status_code
                 }
             return {
                 'success': True,
@@ -478,16 +477,15 @@ def _post_workflow_to_external_api(
         logger.error('External API error %s: %s', response.status_code, response.text)
         return {
             'success': False,
-            'error': f'External API error {response.status_code}: {response.text}',
-            'apiStatus': response.status_code,
-            'apiResponse': response.text
+            'error': f'External API error {response.status_code}',
+            'apiStatus': response.status_code
         }
     except requests.exceptions.Timeout:
         logger.error('External API workflow request timed out')
         return {'success': False, 'error': 'External API request timed out'}
     except requests.exceptions.RequestException as exc:
         logger.error('External API workflow request failed: %s', str(exc))
-        return {'success': False, 'error': f'External API request failed: {str(exc)}'}
+        return {'success': False, 'error': 'External API request failed'}
 
 
 @app.post('/workflow/submit')
