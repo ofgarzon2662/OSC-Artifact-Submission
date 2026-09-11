@@ -1,212 +1,410 @@
-import pytest
-from unittest.mock import patch, MagicMock
-import app
-import json
 import io
-import http.server
+import json
+from unittest.mock import MagicMock, patch
 
-@pytest.fixture
-def mock_channel():
-    return MagicMock()
+import pytest
 
-@pytest.fixture
-def artifact_id():
-    return "artifact-123"
+import app
 
-@pytest.fixture
-def submission_result_success():
-    return {"success": True, "txId": "tx-1", "peerId": "peer-1"}
+TOKEN_CORRELATION = "request-001"
+ARTIFACT_ID = "00000000-0000-4000-8000-000000000001"
+WORKFLOW_ID = "00000000-0000-4000-8000-000000000002"
 
-@pytest.fixture
-def submission_result_failure():
-    return {"success": False, "error": "fail"}
 
-@pytest.fixture
-def mock_artifact_data():
+def organization(msp_id="NSGMSP", organization_id="nsg"):
     return {
-        "title": "Test Artifact",
-        "manifest": [{"filename": "file1.txt", "hash": "123"}],
-        "footprint": "f" * 64
+        "id": organization_id,
+        "name": "nEUROSCIENCE GATEWAY",
+        "mspId": msp_id,
     }
 
-def test_publish_artifact_submitted_success(mock_channel, artifact_id, submission_result_success):
-    app.publish_artifact_submitted(mock_channel, artifact_id, submission_result_success)
-    args, kwargs = mock_channel.basic_publish.call_args
-    body = json.loads(kwargs["body"])
-    assert body["artifactId"] == artifact_id
-    assert body["submissionState"] == "SUCCESS"
-    assert body["blockchainTxId"] == "tx-1"
-    assert body["peerId"] == "peer-1"
-    assert "error" not in body
 
-def test_publish_artifact_submitted_failure(mock_channel, artifact_id, submission_result_failure):
-    app.publish_artifact_submitted(mock_channel, artifact_id, submission_result_failure)
-    args, kwargs = mock_channel.basic_publish.call_args
-    body = json.loads(kwargs["body"])
-    assert body["artifactId"] == artifact_id
-    assert body["submissionState"] == "FAILED"
-    assert body["error"] == "fail"
-    assert "blockchainTxId" not in body
+def metadata(operation, organization_id="nsg", correlation_id=TOKEN_CORRELATION):
+    return {
+        "authenticatedUserId": "user-001",
+        "organizationId": organization_id,
+        "correlationId": correlation_id,
+        "operation": operation,
+        "requestedAt": "2026-09-01T22:00:00Z",
+    }
 
-def test_process_artifact_submission_success(mock_channel, artifact_id, mock_artifact_data):
-    with patch.object(app.peer_client, "submit_artifact", return_value={"success": True, "txId": "tx-1"}) as mock_submit:
-        with patch("app.publish_artifact_submitted") as mock_publish:
-            result = app.process_artifact_submission(mock_channel, artifact_id, mock_artifact_data)
-            assert result is True
-            mock_submit.assert_called_once()
-            mock_publish.assert_called_once()
 
-def test_process_artifact_submission_failure(mock_channel, artifact_id, mock_artifact_data):
-    with patch.object(app.peer_client, "submit_artifact", side_effect=Exception("fail")) as mock_submit:
-        with patch("app.publish_artifact_submitted") as mock_publish:
-            result = app.process_artifact_submission(mock_channel, artifact_id, mock_artifact_data)
-            assert result is False
-            mock_submit.assert_called_once()
-            mock_publish.assert_called_once()
+def artifact_command(operation="artifact.create"):
+    command = {
+        "contractVersion": "v3",
+        "artifactId": ARTIFACT_ID,
+        "organization": organization(),
+        "correlationId": TOKEN_CORRELATION,
+        "request": metadata(operation),
+    }
+    if operation == "artifact.create":
+        command.update(
+            {
+                "title": "Reproducible artifact",
+                "manifest": [],
+                "footprint": "a" * 64,
+                "dois": ["10.1234/example", "", None, "  "],
+            }
+        )
+    else:
+        command["patch"] = {"keywords": ["provenance"]}
+    return command
 
-def test_process_artifact_submission_missing_manifest(mock_channel, artifact_id):
-    """Test submission processing when manifest is missing from the message."""
-    with patch("app.publish_artifact_submitted") as mock_publish:
-        result = app.process_artifact_submission(mock_channel, artifact_id, {"title": "no manifest here"})
-        assert result is False
-        mock_publish.assert_called_once()
-        args, kwargs = mock_publish.call_args
-        assert args[2]['success'] is False
-        assert "Missing 'manifest'" in args[2]['error']
 
-def test_callback_success(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "manifest": [], "title": "test", "footprint": "f" * 64}
-    body = json.dumps(message).encode()
+def workflow_command(operation="workflow.create"):
+    command = {
+        "contractVersion": "v3",
+        "workflowId": WORKFLOW_ID,
+        "organization": organization(),
+        "correlationId": TOKEN_CORRELATION,
+        "request": metadata(operation),
+    }
+    if operation == "workflow.create":
+        command.update({"title": "Workflow", "artifactIds": [ARTIFACT_ID]})
+    else:
+        command["patch"] = {"keywords": ["reproducible"]}
+    return command
+
+
+@pytest.fixture
+def channel():
+    mock = MagicMock()
+    mock.basic_publish.return_value = True
+    return mock
+
+
+def delivery(routing_key, tag=1):
     method = MagicMock()
-    method.delivery_tag = 1
-    with patch("app.process_artifact_submission", return_value=True) as mock_process:
-        app.callback(mock_channel, method, None, body)
-        mock_process.assert_called_once_with(mock_channel, artifact_id, message)
-        mock_channel.basic_ack.assert_called_once_with(delivery_tag=1)
+    method.routing_key = routing_key
+    method.delivery_tag = tag
+    return method
 
-def test_callback_failure(mock_channel, artifact_id):
-    message = {"artifactId": artifact_id, "manifest": [], "title": "test", "footprint": "f" * 64}
-    body = json.dumps(message).encode()
-    method = MagicMock()
-    method.delivery_tag = 2
-    with patch("app.process_artifact_submission", return_value=False) as mock_process:
-        app.callback(mock_channel, method, None, body)
-        mock_process.assert_called_once_with(mock_channel, artifact_id, message)
-        mock_channel.basic_nack.assert_called_once_with(delivery_tag=2, requeue=False)
 
-def test_callback_invalid_json(mock_channel):
-    body = b"not json"
-    method = MagicMock()
-    method.delivery_tag = 3
-    app.callback(mock_channel, method, None, body)
-    mock_channel.basic_nack.assert_called_once_with(delivery_tag=3, requeue=False)
+def properties(deaths=None):
+    value = MagicMock()
+    value.headers = {"x-death": deaths or []}
+    return value
 
-def test_callback_missing_artifact_id(mock_channel):
-    message = {"foo": "bar"}
-    body = json.dumps(message).encode()
-    method = MagicMock()
-    method.delivery_tag = 4
-    app.callback(mock_channel, method, None, body)
-    mock_channel.basic_nack.assert_called_once_with(delivery_tag=4, requeue=False)
 
-def test_health_check_handler_health():
+def test_completion_publication_is_persistent_confirmed_and_traceable(channel):
+    app.publish_artifact_submitted(
+        channel,
+        ARTIFACT_ID,
+        {"success": True, "txId": "tx-001", "peerId": "NSGMSP"},
+        TOKEN_CORRELATION,
+    )
+    kwargs = channel.basic_publish.call_args.kwargs
+    message = json.loads(kwargs["body"])
+    assert kwargs["exchange"] == "artifact.exchange"
+    assert kwargs["routing_key"] == "artifact.submitted"
+    assert kwargs["mandatory"] is True
+    assert kwargs["properties"].delivery_mode == 2
+    assert kwargs["properties"].correlation_id == TOKEN_CORRELATION
+    assert message["submissionState"] == "SUCCESS"
+    assert message["blockchainTxId"] == "tx-001"
+
+
+def test_failed_completion_is_bounded_and_contains_no_transaction(channel):
+    app.publish_artifact_updated(
+        channel,
+        ARTIFACT_ID,
+        {"success": False, "error": "x" * 700},
+        TOKEN_CORRELATION,
+    )
+    message = json.loads(channel.basic_publish.call_args.kwargs["body"])
+    assert message["submissionState"] == "FAILED"
+    assert len(message["error"]) == 512
+    assert "blockchainTxId" not in message
+
+
+def test_missing_publisher_confirm_is_retryable(channel):
+    channel.basic_publish.return_value = False
+    with pytest.raises(app.RetryableProcessingError):
+        app.publish_workflow_submitted(
+            channel, WORKFLOW_ID, {"success": True}, TOKEN_CORRELATION
+        )
+
+
+def test_envelope_rejects_old_contract_and_cross_org_metadata():
+    command = artifact_command()
+    command["contractVersion"] = "v2"
+    with pytest.raises(app.PermanentProcessingError, match="v3"):
+        app._validate_envelope(command, "artifact.create")
+
+    command = artifact_command()
+    command["request"]["organizationId"] = "citizen-science"
+    with pytest.raises(app.PermanentProcessingError, match="organization"):
+        app._validate_envelope(command, "artifact.create")
+
+
+def test_artifact_submission_routes_to_nsg_and_preserves_request(channel):
+    command = artifact_command()
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "submit_artifact",
+        return_value={"success": True, "txId": "tx-001"},
+    ) as submit, patch("app.publish_artifact_submitted") as publish:
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+    payload = submit.call_args.args[0]
+    assert payload["request"] == command["request"]
+    assert payload["organization"]["mspId"] == "NSGMSP"
+    assert payload["dois"] == ["10.1234/example"]
+    assert "data" not in payload
+    publish.assert_called_once()
+
+
+def test_artifact_submission_routes_to_citizen_science(channel):
+    command = artifact_command()
+    command["organization"] = organization(
+        "CitizenScienceMSP", "citizen-science"
+    )
+    command["request"]["organizationId"] = "citizen-science"
+    with patch.object(
+        app.peer_clients["CitizenScienceMSP"],
+        "submit_artifact",
+        return_value={"success": True},
+    ) as submit, patch("app.publish_artifact_submitted"):
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+    submit.assert_called_once()
+
+
+def test_demo_artifact_preserves_controlled_provenance_and_drops_browser_only_fields(
+    channel,
+):
+    command = artifact_command()
+    command.update(
+        {
+            "title": "Demo artifact guest-a1b2c3d4 00000000",
+            "description": "Controlled US-RSE 2026 demonstration context.",
+            "visibility": "public",
+            "manifest": [
+                {
+                    "hash": "a" * 64,
+                    "filename": f"demo-artifact-{ARTIFACT_ID}.csv",
+                    "algorithm": "sha256",
+                }
+            ],
+            "contributor": "guest-a1b2c3d4",
+            # Defense in depth: these fields are not part of the broker contract.
+            "originalFilename": "private-research-name.csv",
+            "fileContents": "never-forward-this",
+        }
+    )
+    command["request"]["authenticatedUserId"] = (
+        "00000000-0000-4000-8000-000000000099"
+    )
+
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "submit_artifact",
+        return_value={"success": True, "txId": "tx-demo-001"},
+    ) as submit, patch("app.publish_artifact_submitted"):
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+
+    payload = submit.call_args.args[0]
+    assert payload["correlationId"] == TOKEN_CORRELATION
+    assert payload["request"]["authenticatedUserId"].endswith("0099")
+    assert payload["manifest"][0]["filename"].startswith("demo-artifact-")
+    assert payload["contributor"] == "guest-a1b2c3d4"
+    assert "originalFilename" not in payload
+    assert "fileContents" not in payload
+
+
+def test_transient_gateway_result_does_not_publish_terminal_event(channel):
+    command = artifact_command()
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "submit_artifact",
+        return_value={"success": False, "retryable": True, "error": "peer down"},
+    ), patch("app.publish_artifact_submitted") as publish:
+        with pytest.raises(app.RetryableProcessingError, match="peer down"):
+            app.process_artifact_submission(channel, ARTIFACT_ID, command)
+    publish.assert_not_called()
+
+
+def test_permanent_gateway_result_publishes_failure(channel):
+    command = artifact_command()
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "submit_artifact",
+        return_value={"success": False, "retryable": False, "error": "invalid"},
+    ), patch("app.publish_artifact_submitted") as publish:
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+    assert publish.call_args.args[2]["success"] is False
+
+
+def test_invalid_domain_payload_becomes_a_terminal_failure(channel):
+    command = artifact_command()
+    del command["manifest"]
+    with patch("app.publish_artifact_submitted") as publish:
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+    assert "manifest" in publish.call_args.args[2]["error"].lower()
+
+
+def test_artifact_update_preserves_v3_metadata(channel):
+    command = artifact_command("artifact.update")
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "update_artifact",
+        return_value={"success": True},
+    ) as update, patch("app.publish_artifact_updated"):
+        assert app.process_artifact_update(channel, ARTIFACT_ID, command) is True
+    update.assert_called_once_with(
+        ARTIFACT_ID,
+        {"keywords": ["provenance"]},
+        organization=command["organization"],
+        contract_version="v3",
+        request=command["request"],
+        correlation_id=TOKEN_CORRELATION,
+    )
+
+
+def test_workflow_create_and_update_use_dedicated_endpoints(channel):
+    create = workflow_command()
+    update = workflow_command("workflow.update")
+    client = app.peer_clients["NSGMSP"]
+    with patch.object(
+        client, "submit_workflow", return_value={"success": True}
+    ) as submit, patch.object(
+        client, "update_workflow", return_value={"success": True}
+    ) as update_call, patch("app.publish_workflow_submitted"), patch(
+        "app.publish_workflow_updated"
+    ):
+        assert app.process_workflow_submission(channel, WORKFLOW_ID, create) is True
+        assert app.process_workflow_update(channel, WORKFLOW_ID, update) is True
+    assert submit.call_args.args[0]["artifactIds"] == [ARTIFACT_ID]
+    assert update_call.call_args.kwargs["request"]["operation"] == "workflow.update"
+
+
+def test_callback_acknowledges_success(channel):
+    command = artifact_command()
+    with patch("app.process_artifact_submission", return_value=True) as process:
+        app.callback(
+            channel,
+            delivery("artifact.submit", 10),
+            properties(),
+            json.dumps(command).encode(),
+        )
+    process.assert_called_once_with(channel, ARTIFACT_ID, command)
+    channel.basic_ack.assert_called_once_with(delivery_tag=10)
+
+
+def test_callback_rejects_malformed_json_without_requeue(channel):
+    app.callback(channel, delivery("artifact.submit", 11), properties(), b"not-json")
+    channel.basic_nack.assert_called_once_with(delivery_tag=11, requeue=False)
+
+
+def test_callback_records_permanent_validation_failure_then_acks(channel):
+    command = artifact_command()
+    command["request"]["operation"] = "artifact.update"
+    with patch("app.publish_artifact_submitted") as publish:
+        app.callback(
+            channel,
+            delivery("artifact.submit", 12),
+            properties(),
+            json.dumps(command).encode(),
+        )
+    publish.assert_called_once()
+    channel.basic_ack.assert_called_once_with(delivery_tag=12)
+
+
+def test_callback_dead_letters_a_transient_failure_for_retry(channel):
+    command = artifact_command()
+    with patch(
+        "app.process_artifact_submission",
+        side_effect=app.RetryableProcessingError("peer unavailable"),
+    ):
+        app.callback(
+            channel,
+            delivery("artifact.submit", 13),
+            properties(),
+            json.dumps(command).encode(),
+        )
+    channel.basic_nack.assert_called_once_with(delivery_tag=13, requeue=False)
+    channel.basic_ack.assert_not_called()
+
+
+def test_callback_emits_failure_after_bounded_retries(channel):
+    command = artifact_command()
+    deaths = [
+        {"reason": "rejected", "queue": app.RABBITMQ_QUEUE_SUBMIT, "count": 3}
+    ]
+    with patch(
+        "app.process_artifact_submission",
+        side_effect=app.RetryableProcessingError("peer unavailable"),
+    ), patch("app.publish_artifact_submitted") as publish:
+        app.callback(
+            channel,
+            delivery("artifact.submit", 14),
+            properties(deaths),
+            json.dumps(command).encode(),
+        )
+    publish.assert_called_once()
+    channel.basic_ack.assert_called_once_with(delivery_tag=14)
+
+
+def test_topology_uses_dead_letter_retry_queues():
+    channel = MagicMock()
+    app.declare_messaging_topology(channel)
+    declarations = channel.queue_declare.call_args_list
+    main = next(
+        call for call in declarations if call.kwargs["queue"] == "artifact.submit.queue"
+    )
+    retry = next(
+        call
+        for call in declarations
+        if call.kwargs["queue"] == "artifact.submit.queue.retry"
+    )
+    assert main.kwargs["arguments"]["x-dead-letter-exchange"] == "osc.retry.exchange"
+    assert retry.kwargs["arguments"]["x-message-ttl"] == app.RETRY_DELAY_MS
+    assert retry.kwargs["arguments"]["x-dead-letter-exchange"] == "artifact.exchange"
+
+
+def test_tls_is_mandatory_for_aws(monkeypatch):
+    monkeypatch.setattr(app, "ENVIRONMENT", "aws")
+    monkeypatch.setattr(app, "RABBITMQ_TLS", False)
+    with pytest.raises(RuntimeError, match="TLS"):
+        app._tls_options()
+
+
+def test_tls_uses_server_name_and_tls_12(monkeypatch):
+    context = MagicMock()
+    monkeypatch.setattr(app, "RABBITMQ_TLS", True)
+    monkeypatch.setattr(app.ssl, "create_default_context", lambda cafile=None: context)
+    monkeypatch.setattr(app.pika, "SSLOptions", lambda value, host: (value, host))
+    result = app._tls_options()
+    assert result == (context, app.RABBITMQ_HOST)
+    assert context.minimum_version == app.ssl.TLSVersion.TLSv1_2
+
+
+def test_health_endpoint_is_sanitized():
     handler = app.HealthCheckHandler
     request = MagicMock()
     request.makefile.return_value = io.BytesIO()
-    server = MagicMock()
     output = io.BytesIO()
-    h = handler(request, ('127.0.0.1', 0), server)
-    h.wfile = output
-    h.path = '/health'
-    h.send_response = MagicMock()
-    h.send_header = MagicMock()
-    h.end_headers = MagicMock()
-    h.do_GET()
-    output.seek(0)
-    assert b'healthy' in output.getvalue()
+    instance = handler(request, ("127.0.0.1", 0), MagicMock())
+    instance.wfile = output
+    instance.path = "/health"
+    instance.send_response = MagicMock()
+    instance.send_header = MagicMock()
+    instance.end_headers = MagicMock()
+    instance.do_GET()
+    body = output.getvalue()
+    assert b"submission-worker" in body
+    assert b"LEDGER_GATEWAY_TOKEN" not in body
 
-def test_health_check_handler_not_found():
-    handler = app.HealthCheckHandler
-    request = MagicMock()
-    request.makefile.return_value = io.BytesIO()
-    server = MagicMock()
-    output = io.BytesIO()
-    h = handler(request, ('127.0.0.1', 0), server)
-    h.wfile = output
-    h.path = '/bad'
-    h.send_response = MagicMock()
-    h.send_header = MagicMock()
-    h.end_headers = MagicMock()
-    h.do_GET()
-    output.seek(0)
-    assert b'Not Found' in output.getvalue()
 
-def test_start_health_server_error(monkeypatch):
-    class DummyServer:
-        def __init__(self, *a, **kw):
-            raise Exception('fail')
-        def serve_forever(self):
-            pass
-    monkeypatch.setattr(app.http.server, 'HTTPServer', DummyServer)
-    with patch.object(app.logger, 'error') as mock_log:
-        try:
-            app.start_health_server()
-        except Exception:
-            pass
-        mock_log.assert_called()
-
-def test_start_rabbitmq_consumer_connection_error(monkeypatch):
-    class DummyAMQPError(Exception): pass
-    monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', DummyAMQPError)
-    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: (_ for _ in ()).throw(DummyAMQPError('fail')))
-    with patch.object(app.logger, 'warning') as mock_warn, \
-         patch.object(app.logger, 'error') as mock_err, \
-         patch('app.time.sleep', return_value=None):
-        app.start_rabbitmq_consumer()
-        assert mock_warn.called or mock_err.called
-
-def test_start_rabbitmq_consumer_success(monkeypatch):
-    mock_conn = MagicMock()
-    mock_chan = MagicMock()
-    mock_chan.start_consuming.side_effect = lambda: None
-    mock_conn.channel.return_value = mock_chan
-    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: mock_conn)
-    monkeypatch.setattr(app.pika, 'PlainCredentials', lambda u, p: None)
-    monkeypatch.setattr(app.pika, 'ConnectionParameters', lambda **kw: None)
-    monkeypatch.setattr(app.pika.exceptions, 'AMQPConnectionError', Exception)
-    with patch.object(app.logger, 'info') as mock_info:
-        app.start_rabbitmq_consumer()
-        assert mock_info.called
-
-def test_callback_unexpected_error(mock_channel):
-    """Test callback handling of unexpected errors (e.g., malformed message structure)."""
-    body = json.dumps("a string, not a dict").encode()
-    method = MagicMock()
-    method.delivery_tag = 5
-    with patch.object(app.logger, 'error') as mock_log:
-        app.callback(mock_channel, method, None, body)
-        mock_channel.basic_nack.assert_called_once_with(delivery_tag=5, requeue=False)
-        mock_log.assert_any_call("Unexpected error processing message: 'str' object has no attribute 'get'")
-
-def test_publish_artifact_submitted_exception(mock_channel, artifact_id, submission_result_success):
-    """Test exception handling during artifact submission publishing."""
-    with patch("json.dumps", side_effect=TypeError("JSON serialization failed")):
-        with pytest.raises(TypeError, match="JSON serialization failed"):
-            app.publish_artifact_submitted(mock_channel, artifact_id, submission_result_success)
-
-def test_start_rabbitmq_consumer_keyboard_interrupt(monkeypatch):
-    """Test that KeyboardInterrupt stops the consumer."""
-    mock_conn = MagicMock()
-    mock_chan = MagicMock()
-    # Simulate KeyboardInterrupt being raised when start_consuming is called
-    mock_chan.start_consuming.side_effect = KeyboardInterrupt
-    mock_conn.channel.return_value = mock_chan
-    # Configure the mock to report that the connection is open
-    mock_conn.is_closed = False
-    monkeypatch.setattr(app.pika, 'BlockingConnection', lambda *a, **kw: mock_conn)
-    
-    with patch.object(app.logger, 'info') as mock_log:
-        app.start_rabbitmq_consumer()
-        mock_log.assert_any_call("Shutting down consumer...")
-        mock_chan.stop_consuming.assert_called_once()
-        mock_conn.close.assert_called_once()
+def test_consumer_enables_confirms_and_consumes_four_command_queues(monkeypatch):
+    connection = MagicMock()
+    channel = MagicMock()
+    connection.channel.return_value = channel
+    connection.is_closed = False
+    monkeypatch.setattr(app, "ENVIRONMENT", "local")
+    monkeypatch.setattr(app.pika, "BlockingConnection", lambda _parameters: connection)
+    monkeypatch.setattr(app.pika, "ConnectionParameters", lambda **kwargs: kwargs)
+    monkeypatch.setattr(app.pika, "PlainCredentials", lambda *_args: None)
+    monkeypatch.setattr(app, "declare_messaging_topology", MagicMock())
+    app.start_rabbitmq_consumer()
+    channel.confirm_delivery.assert_called_once()
+    assert channel.basic_consume.call_count == 4
+    connection.close.assert_called_once()

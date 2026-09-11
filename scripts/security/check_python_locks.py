@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Validate exact direct requirements and hashes without installing packages."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+REQUIREMENT_RE = re.compile(
+    r"^([A-Za-z0-9_.-]+)(?:\[[A-Za-z0-9_.,-]+\])?==([^\s;\\]+)"
+)
+LOCK_PYTHON_RE = re.compile(r"pip-compile with Python (\d+\.\d+)")
+
+
+def canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def parse_direct(path: Path) -> dict[str, str]:
+    requirements: dict[str, str] = {}
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = REQUIREMENT_RE.match(line)
+        if not match:
+            raise ValueError(f"{path}:{line_number}: requirement must use exact == pin")
+        requirements[canonical(match.group(1))] = match.group(2)
+    if not requirements:
+        raise ValueError(f"{path}: no direct requirements found")
+    return requirements
+
+
+def parse_lock(path: Path) -> dict[str, str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    requirements: dict[str, str] = {}
+    current_name = ""
+    current_line = 0
+    current_hashed = False
+
+    def finish() -> None:
+        if current_name and not current_hashed:
+            raise ValueError(f"{path}:{current_line}: locked package has no SHA-256 hash")
+
+    for line_number, raw in enumerate(lines, 1):
+        if raw and not raw[0].isspace() and not raw.startswith(("#", "--")):
+            finish()
+            match = REQUIREMENT_RE.match(raw)
+            if not match:
+                raise ValueError(f"{path}:{line_number}: lock entry is not exact")
+            current_name = canonical(match.group(1))
+            current_line = line_number
+            current_hashed = "--hash=sha256:" in raw
+            requirements[current_name] = match.group(2)
+        elif current_name and "--hash=sha256:" in raw:
+            current_hashed = True
+    finish()
+    if not requirements:
+        raise ValueError(f"{path}: no locked requirements found")
+    return requirements
+
+
+def lock_python_version(path: Path) -> str | None:
+    for raw in path.read_text(encoding="utf-8").splitlines()[:10]:
+        match = LOCK_PYTHON_RE.search(raw)
+        if match:
+            return match.group(1)
+    return None
+
+
+def check_component(component: Path) -> list[str]:
+    direct_path = component / "requirements.txt"
+    findings: list[str] = []
+    lock_paths = [component / "requirements.lock"]
+    windows_lock = component / "requirements.windows.lock"
+    if windows_lock.exists():
+        lock_paths.append(windows_lock)
+    if not direct_path.is_file() or not lock_paths[0].is_file():
+        return [f"{component}: requirements.txt and requirements.lock are required"]
+    try:
+        direct = parse_direct(direct_path)
+    except (OSError, UnicodeError, ValueError) as exc:
+        return [str(exc)]
+    for lock_path in lock_paths:
+        try:
+            locked = parse_lock(lock_path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            findings.append(str(exc))
+            continue
+        for name, version in direct.items():
+            if locked.get(name) != version:
+                findings.append(
+                    f"{component}: {name}=={version} is not represented exactly in {lock_path.name}"
+                )
+        version_path = component / ".python-version"
+        if version_path.is_file():
+            selected = ".".join(
+                version_path.read_text(encoding="utf-8").strip().split(".")[:2]
+            )
+            generated_with = lock_python_version(lock_path)
+            if generated_with and selected != generated_with:
+                findings.append(
+                    f"{component}: .python-version selects {selected}, but "
+                    f"{lock_path.name} was generated with Python {generated_with}"
+                )
+    runtime_direct_path = component / "requirements.runtime.txt"
+    runtime_lock_path = component / "requirements.runtime.lock"
+    if runtime_direct_path.exists() != runtime_lock_path.exists():
+        findings.append(
+            f"{component}: requirements.runtime.txt and requirements.runtime.lock must be added together"
+        )
+    elif runtime_direct_path.exists():
+        try:
+            runtime_direct = parse_direct(runtime_direct_path)
+            runtime_locked = parse_lock(runtime_lock_path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            findings.append(str(exc))
+        else:
+            for name, version in runtime_direct.items():
+                if runtime_locked.get(name) != version:
+                    findings.append(
+                        f"{component}: {name}=={version} is not represented exactly in requirements.runtime.lock"
+                    )
+    return findings
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("components", nargs="+")
+    args = parser.parse_args()
+    findings = []
+    for value in args.components:
+        findings.extend(check_component(Path(value).resolve()))
+    if findings:
+        print("PYTHON LOCK CHECK FAILED", file=sys.stderr)
+        for finding in findings:
+            print(f" - {finding}", file=sys.stderr)
+        return 1
+    print(f"Python lock check passed for {len(args.components)} component(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

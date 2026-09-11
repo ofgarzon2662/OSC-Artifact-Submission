@@ -1,0 +1,156 @@
+name: Deploy staging component
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component to deploy
+        required: true
+        type: choice
+        options:
+          - adapter
+          - submission_listener
+          - submission_worker
+          - get_history_worker
+
+permissions:
+  contents: read
+
+concurrency:
+  group: artifact-submission-${{ inputs.component }}-staging
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build verified component image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      role: ${{ steps.target.outputs.role }}
+      repository: ${{ steps.target.outputs.repository }}
+      task: ${{ steps.target.outputs.task }}
+      container: ${{ steps.target.outputs.container }}
+      service: ${{ steps.target.outputs.service }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Resolve deployment metadata
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.component }}" in
+            adapter)
+              echo "role=osc-github-deploy-adapter" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-adapter" >> "$GITHUB_OUTPUT"
+              echo "task=osc-adapter" >> "$GITHUB_OUTPUT"
+              echo "container=adapter" >> "$GITHUB_OUTPUT"
+              echo "service=osc-adapter" >> "$GITHUB_OUTPUT"
+              ;;
+            submission_listener)
+              echo "role=osc-github-deploy-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "task=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              echo "container=submission-listener" >> "$GITHUB_OUTPUT"
+              echo "service=osc-submission-listener" >> "$GITHUB_OUTPUT"
+              ;;
+            submission_worker)
+              echo "role=osc-github-deploy-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "task=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              echo "container=submission-worker" >> "$GITHUB_OUTPUT"
+              echo "service=osc-submission-worker" >> "$GITHUB_OUTPUT"
+              ;;
+            get_history_worker)
+              echo "role=osc-github-deploy-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "repository=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "task=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "container=get-history-worker" >> "$GITHUB_OUTPUT"
+              echo "service=osc-get-history-worker" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - name: Build local image without cloud credentials
+        run: docker build --tag osc-${{ inputs.component }}:${{ github.sha }} ./${{ inputs.component }}
+      - name: Generate CycloneDX image SBOM
+        uses: anchore/sbom-action@a930d0ac434e3182448fe678398ba5713717112a # v0.21.0
+        with:
+          image: osc-${{ inputs.component }}:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: image-sbom.cdx.json
+          upload-artifact: false
+      - name: Scan local image with pinned Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            ghcr.io/aquasecurity/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9 \
+            image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --no-progress \
+            osc-${{ inputs.component }}:${{ github.sha }}
+      - name: Archive and checksum verified image
+        run: |
+          docker save osc-${{ inputs.component }}:${{ github.sha }} | gzip > component-image.tar.gz
+          sha256sum component-image.tar.gz image-sbom.cdx.json > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.component }}-${{ github.sha }}
+          path: |
+            component-image.tar.gz
+            image-sbom.cdx.json
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy verified component image
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.component }}-${{ github.sha }}
+      - name: Verify and load image archive
+        run: |
+          sha256sum --check SHA256SUMS
+          gunzip --stdout component-image.tar.gz | docker load
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::269624229733:role/${{ needs.build.outputs.role }}
+          aws-region: us-west-2
+          role-duration-seconds: 900
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+      - name: Push image and resolve immutable digest
+        id: image
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ needs.build.outputs.repository }}
+        run: |
+          set -euo pipefail
+          tagged_image="$REGISTRY/$REPOSITORY:$GITHUB_SHA"
+          docker tag osc-${{ inputs.component }}:${GITHUB_SHA} "$tagged_image"
+          docker push "$tagged_image"
+          digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          test -n "$digest" && test "$digest" != "None"
+          echo "uri=$REGISTRY/$REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+      - name: Read current task definition
+        run: aws ecs describe-task-definition --task-definition ${{ needs.build.outputs.task }} --query taskDefinition > task-definition.json
+      - id: task
+        uses: aws-actions/amazon-ecs-render-task-definition@138c24f321fdbdf7edee4a685519d253cae2cdea # v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ needs.build.outputs.container }}
+          image: ${{ steps.image.outputs.uri }}
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@c465972ecbd160473f22e683363b422a5412a3de # v2
+        with:
+          task-definition: ${{ steps.task.outputs.task-definition }}
+          service: ${{ needs.build.outputs.service }}
+          cluster: osc-staging
+          wait-for-service-stability: true
