@@ -9,7 +9,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN rm -rf /usr/local/lib/python3.11/site-packages/pip* \
+RUN apk add --no-cache libuuid=2.42.3-r1 \
+    && rm -rf /usr/local/lib/python3.11/site-packages/pip* \
     /usr/local/lib/python3.11/site-packages/setuptools* \
     /usr/local/lib/python3.11/site-packages/wheel* \
     /usr/local/lib/python3.11/site-packages/packaging* \
