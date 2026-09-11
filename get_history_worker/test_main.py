@@ -7,10 +7,18 @@ from main import app
 client = TestClient(app)
 
 
-def test_health():
+def test_health(monkeypatch):
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', 'test-ledger-gateway-token-00000001')
     r = client.get('/health')
     assert r.status_code == 200
     assert r.json().get('status') == 'healthy'
+
+
+def test_health_reports_missing_gateway_token(monkeypatch):
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', '')
+    r = client.get('/health')
+    assert r.status_code == 503
+    assert r.json().get('status') == 'misconfigured'
 
 
 def test_history_validation():
@@ -31,7 +39,7 @@ def test_history_happy_path_desc_and_cache(monkeypatch):
         {"txId": "tx3", "timestamp": "2025-01-03T00:00:00Z", "isDelete": False, "value": {"id": "c"}},
     ]
 
-    async def fake_fetch(_artifact_id: str):
+    async def fake_fetch(_artifact_id: str, _asset_type: str = 'artifact'):
         return fake
 
     # Clear cache and patch fetch
@@ -74,7 +82,7 @@ def test_history_order_asc(monkeypatch):
         {"txId": "t1", "timestamp": "2025-01-01T00:00:00Z", "isDelete": False},
         {"txId": "t2", "timestamp": "2025-01-02T00:00:00Z", "isDelete": False},
     ]
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return fake
     ghw.cache.clear()
     monkeypatch.setattr(ghw, 'fetch_history_from_bridge', fake_fetch)
@@ -89,9 +97,9 @@ def test_refresh_replaces_cache(monkeypatch):
     first = [ {"txId": "a", "timestamp": "2025-01-01Z", "isDelete": False} ]
     second = [ {"txId": "b", "timestamp": "2025-01-02Z", "isDelete": False} ]
 
-    async def fake_fetch_initial(_):
+    async def fake_fetch_initial(_, _asset_type='artifact'):
         return first
-    async def fake_fetch_next(_):
+    async def fake_fetch_next(_, _asset_type='artifact'):
         return second
 
     ghw.cache.clear()
@@ -119,7 +127,7 @@ def test_history_limit_clamped_to_max_page_size(monkeypatch):
         for i in range(10)
     ]
 
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return fake
 
     ghw.cache.clear()
@@ -145,7 +153,7 @@ def test_history_offset_equals_total_returns_empty(monkeypatch):
         {"txId": "tx2", "timestamp": "2025-01-02T00:00:00Z", "isDelete": False},
     ]
 
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return fake
 
     ghw.cache.clear()
@@ -167,7 +175,7 @@ def test_history_desc_order_builds_from_asc_on_second_call(monkeypatch):
         {"txId": "t3", "timestamp": "2025-01-03T00:00:00Z", "isDelete": False},
     ]
 
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return fake
 
     ghw.cache.clear()
@@ -206,10 +214,11 @@ def test_fetch_history_bridge_non_200_raises_502(monkeypatch):
             return self
         async def __aexit__(self, *args):
             pass
-        async def get(self, url):
+        async def get(self, url, **_kwargs):
             return FakeResponse()
 
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: FakeClient())
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', 'test-ledger-gateway-token-00000001')
 
     aid = '00000000-0000-4000-8000-000000000007'
     r = client.get('/history', params={'artifactId': aid})
@@ -231,10 +240,11 @@ def test_fetch_history_bridge_non_list_response_raises_502(monkeypatch):
             return self
         async def __aexit__(self, *args):
             pass
-        async def get(self, url):
+        async def get(self, url, **_kwargs):
             return FakeResponseNotList()
 
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: FakeClient())
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', 'test-ledger-gateway-token-00000001')
     ghw.cache.clear()
     aid = '00000000-0000-4000-8000-000000000008'
     r = client.get('/history', params={'artifactId': aid})
@@ -248,7 +258,7 @@ def test_history_hasmore_true_when_more_items_available(monkeypatch):
         for i in range(5)
     ]
 
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return fake
 
     ghw.cache.clear()
@@ -265,7 +275,7 @@ def test_refresh_history_post_method(monkeypatch):
     """POST /history/refresh should also work (api_route accepts GET and POST)."""
     second = [{"txId": "new", "timestamp": "2025-01-03Z", "isDelete": False}]
 
-    async def fake_fetch(_):
+    async def fake_fetch(_, _asset_type='artifact'):
         return second
 
     ghw.cache.clear()
@@ -276,5 +286,50 @@ def test_refresh_history_post_method(monkeypatch):
     data = r.json()
     assert data['total'] == 1
     assert data['artifactId'] == aid
+
+
+def test_workflow_history_uses_authenticated_workflow_route(monkeypatch):
+    import httpx
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '[]'
+
+        def json(self):
+            return []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, **kwargs):
+            captured['url'] = url
+            captured['headers'] = kwargs.get('headers')
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: FakeClient())
+    monkeypatch.setattr(ghw, 'BRIDGE_URL', 'http://ledger-gateway-nsg:4000')
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', 'test-ledger-gateway-token-00000001')
+    ghw.cache.clear()
+    aid = '00000000-0000-4000-8000-00000000000b'
+    response = client.get('/history', params={'artifactId': aid, 'assetType': 'workflow'})
+    assert response.status_code == 200
+    assert captured['url'] == f'http://ledger-gateway-nsg:4000/workflow/history/{aid}'
+    assert captured['headers'] == {
+        'Authorization': 'Bearer test-ledger-gateway-token-00000001'
+    }
+
+
+def test_missing_gateway_token_fails_closed(monkeypatch):
+    monkeypatch.setattr(ghw, 'BRIDGE_TOKEN', '')
+    ghw.cache.clear()
+    aid = '00000000-0000-4000-8000-00000000000c'
+    response = client.get('/history', params={'artifactId': aid})
+    assert response.status_code == 503
 
 
