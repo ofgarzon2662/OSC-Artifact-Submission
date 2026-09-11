@@ -170,9 +170,6 @@ jobs:
     needs: [python, bridge]
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    permissions:
-      contents: read
-      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -188,15 +185,12 @@ jobs:
           format: cyclonedx-json
           output-file: ${{ matrix.component }}-sbom.cdx.json
           artifact-name: ${{ matrix.component }}-sbom.cdx.json
-      - name: Scan image
-        id: scan
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: osc-${{ matrix.component }}:${{ github.sha }}
-          fail-build: true
-          severity-cutoff: critical
-          output-format: sarif
-      - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        if: always() && steps.scan.outputs.sarif != ''
-        with:
-          sarif_file: ${{ steps.scan.outputs.sarif }}
+      - name: Scan image with pinned Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            ghcr.io/aquasecurity/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9 \
+            image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --no-progress \
+            osc-${{ matrix.component }}:${{ github.sha }}
