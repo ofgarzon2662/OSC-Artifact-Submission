@@ -61,3 +61,25 @@ verification. The evidence environment uses a private single-instance broker to
 control cost. A production design should use a multi-AZ broker and quorum queues;
 that availability profile is documented but is not claimed as tested by this
 experiment.
+
+## US-RSE 2026 guest compatibility
+
+The interactive demonstration does not introduce a second broker protocol or
+ledger path. Its API-generated records use the existing strict v3 envelope,
+organization-scoped Ledger Gateway, durable queues, publisher confirms,
+bounded retries, and correlation receipt idempotency.
+
+The API supplies a random guest alias and an authenticated request identifier
+that is server-bound to the selected demonstration organization. The worker
+allowlists forwarded keys before calling the Ledger Gateway. Browser-only or
+unknown fields—including file bytes and original filenames—are discarded even
+if a compromised producer adds them to a broker message. The Ledger Gateway
+then applies its own closed Joi schema and rejects mismatched organization,
+MSP, request, operation, or correlation metadata.
+
+Deployment must configure `NSG_ORGANIZATION_ID` and
+`CITIZEN_SCIENCE_ORGANIZATION_ID` to the exact database UUIDs seeded for the
+`neuroscience-gateway` and `citizen-science` slugs. Display names and slugs are
+not substitutes for these IDs. Redelivery uses the same record UUID and
+correlation ID, allowing the v3 chaincode receipt to return the prior result
+without a duplicate ledger revision.

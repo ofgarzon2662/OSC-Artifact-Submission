@@ -39,6 +39,13 @@
     "typescript": "^5.6.3"
   },
   "overrides": {
-    "path-to-regexp": "0.1.13"
+    "body-parser": "1.20.8",
+    "brace-expansion@^1": "1.1.18",
+    "diff": "4.0.4",
+    "js-yaml@^3": "3.15.2",
+    "minimatch@^3": "3.1.5",
+    "path-to-regexp": "0.1.13",
+    "picomatch@^2": "2.3.2",
+    "qs": "6.16.0"
   }
 }

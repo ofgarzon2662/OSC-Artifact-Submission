@@ -168,6 +168,48 @@ def test_artifact_submission_routes_to_citizen_science(channel):
     submit.assert_called_once()
 
 
+def test_demo_artifact_preserves_controlled_provenance_and_drops_browser_only_fields(
+    channel,
+):
+    command = artifact_command()
+    command.update(
+        {
+            "title": "Demo artifact guest-a1b2c3d4 00000000",
+            "description": "Controlled US-RSE 2026 demonstration context.",
+            "visibility": "public",
+            "manifest": [
+                {
+                    "hash": "a" * 64,
+                    "filename": f"demo-artifact-{ARTIFACT_ID}.csv",
+                    "algorithm": "sha256",
+                }
+            ],
+            "contributor": "guest-a1b2c3d4",
+            # Defense in depth: these fields are not part of the broker contract.
+            "originalFilename": "private-research-name.csv",
+            "fileContents": "never-forward-this",
+        }
+    )
+    command["request"]["authenticatedUserId"] = (
+        "00000000-0000-4000-8000-000000000099"
+    )
+
+    with patch.object(
+        app.peer_clients["NSGMSP"],
+        "submit_artifact",
+        return_value={"success": True, "txId": "tx-demo-001"},
+    ) as submit, patch("app.publish_artifact_submitted"):
+        assert app.process_artifact_submission(channel, ARTIFACT_ID, command) is True
+
+    payload = submit.call_args.args[0]
+    assert payload["correlationId"] == TOKEN_CORRELATION
+    assert payload["request"]["authenticatedUserId"].endswith("0099")
+    assert payload["manifest"][0]["filename"].startswith("demo-artifact-")
+    assert payload["contributor"] == "guest-a1b2c3d4"
+    assert "originalFilename" not in payload
+    assert "fileContents" not in payload
+
+
 def test_transient_gateway_result_does_not_publish_terminal_event(channel):
     command = artifact_command()
     with patch.object(
